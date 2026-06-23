@@ -5,7 +5,7 @@
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QAction, QKeySequence, QFont
+from PyQt6.QtGui import QAction, QKeySequence, QFont, QShortcut
 from PyQt6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -195,12 +195,35 @@ class MainWindow(QMainWindow):
         self._editor.textChanged.connect(self._on_text_changed)
         # 工具栏格式化请求
         self._toolbar.format_requested.connect(self._insert_format)
+        # 格式化快捷键绑定
+        self._setup_format_shortcuts()
+
+    # ── 格式化快捷键 ──────────────────────────────────
+
+    def _setup_format_shortcuts(self) -> None:
+        """为工具栏格式化按钮绑定键盘快捷键。
+
+        遍历工具栏 BUTTONS 定义，为带有 shortcut 字段的操作注册 QShortcut，
+        触发时复用 _insert_format() 与按钮点击走同一逻辑路径。
+        """
+        for item in self._toolbar.BUTTONS:
+            if item is None:
+                continue
+            shortcut_str = item.get("shortcut")
+            if shortcut_str is None:
+                continue
+            before, after = item["before"], item["after"]
+            shortcut = QShortcut(QKeySequence(shortcut_str), self)
+            shortcut.activated.connect(
+                lambda b=before, a=after: self._insert_format(b, a)
+            )
 
     # ── 文件操作 ──────────────────────────────────────
 
     def _on_new(self) -> None:
         if self._maybe_save():
             self._editor.clear()
+            self._editor.set_base_dir(None)
             self._file_manager.new_file()
             self._preview.show_placeholder()
             self.setWindowTitle(self.WINDOW_TITLE)
@@ -221,6 +244,7 @@ class MainWindow(QMainWindow):
         try:
             content = self._file_manager.read_file(path)
             self._editor.setPlainText(content)
+            self._editor.set_base_dir(str(Path(path).parent))
             self._update_window_title()
             self._update_status(f"已打开: {path}")
         except IOError as e:
@@ -244,6 +268,7 @@ class MainWindow(QMainWindow):
     def _do_save(self, path: str) -> None:
         try:
             saved = self._file_manager.save_file(self._editor.toPlainText(), path)
+            self._editor.set_base_dir(str(Path(saved).parent))
             self._update_window_title()
             self._update_status(f"已保存: {saved}")
         except IOError as e:
