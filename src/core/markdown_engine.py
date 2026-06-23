@@ -425,8 +425,13 @@ class MarkdownEngine:
         try:
             from pygments.formatters import HtmlFormatter
             self._code_css = HtmlFormatter(nobackground=True).get_style_defs(".highlight")
+            # 暗色模式使用 monokai 主题
+            self._code_css_dark = HtmlFormatter(
+                nobackground=True, style="monokai"
+            ).get_style_defs("body.dark .highlight")
         except ImportError:
             self._code_css = ""
+            self._code_css_dark = ""
 
     # ── 转换 ──────────────────────────────────────────
 
@@ -491,6 +496,7 @@ MathJax = {{
 </script>
 <style>
 {self._code_css}
+{self._code_css_dark}
 {font_face_css}
 {_DEFAULT_PREVIEW_LIGHT_CSS}
 {math_css}
@@ -533,10 +539,13 @@ MathJax = {{
 </script>
 <style>
 {self._code_css}
+{self._code_css_dark}
 {font_face_css}
 {body_css}
 {math_css}
 {dark_css}
+html {{ overflow-x: hidden; }}
+pre {{ overflow-x: auto; }}
 </style>
 </head>
 {body_tag}

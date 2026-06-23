@@ -430,10 +430,6 @@ THEMES: dict[str, Theme] = {
         name="LaTeX 亮色", qss=LIGHT_QSS, preview_css=LIGHT_PREVIEW_CSS,
         engine_theme="latex",
     ),
-    "LaTeX 暗色": Theme(
-        name="LaTeX 暗色", qss=DARK_QSS, preview_css=DARK_PREVIEW_CSS,
-        engine_theme="latex",
-    ),
 }
 
 DEFAULT_THEME = "亮色"

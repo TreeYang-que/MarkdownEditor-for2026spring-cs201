@@ -5,7 +5,7 @@
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, QTimer, QThread, QObject, pyqtSignal
-from PyQt6.QtGui import QAction, QKeySequence, QFont, QShortcut
+from PyQt6.QtGui import QAction, QColor, QKeySequence, QPalette, QShortcut
 from PyQt6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -103,6 +103,7 @@ class MainWindow(QMainWindow):
         # ── 初始主题 ──────────────────────────────────
         self._current_theme: str = DEFAULT_THEME
         self._dark_mode: bool = False
+        self._sync_scrolling_enabled: bool = True
         self._apply_theme(DEFAULT_THEME)
 
         # 预览防抖定时器（300ms）
@@ -217,8 +218,17 @@ class MainWindow(QMainWindow):
         # ── 视图菜单 ──
         view_menu = menubar.addMenu("视图(&V)")
 
+        sync_scroll_action = QAction("同步滚动(&Y)", self)
+        sync_scroll_action.setCheckable(True)
+        sync_scroll_action.setChecked(True)
+        sync_scroll_action.triggered.connect(self._on_toggle_sync_scroll)
+        view_menu.addAction(sync_scroll_action)
+
+        view_menu.addSeparator()
+
         for theme_name in THEMES:
             action = QAction(f"切换{theme_name}主题", self)
+            action.setData(theme_name)  # 存 key，供 _apply_theme 精确匹配
             action.triggered.connect(
                 lambda checked, t=theme_name: self._apply_theme(t)
             )
@@ -311,6 +321,7 @@ class MainWindow(QMainWindow):
 
     def _add_tab(self, tab: Tab, title: str = "未命名", switch: bool = True) -> int:
         """添加标签页并连接信号。"""
+        tab.set_sync_scrolling(self._sync_scrolling_enabled)
         self._connect_tab_signals(tab)
         idx = self._tab_widget.addTab(tab, title)
         if switch:
@@ -718,6 +729,18 @@ class MainWindow(QMainWindow):
         self._populate_font_menu_actions(font_menu)
 
     # ═══════════════════════════════════════════════════════
+    #  同步滚动
+    # ═══════════════════════════════════════════════════════
+
+    def _on_toggle_sync_scroll(self, enabled: bool) -> None:
+        """全局开关：启用/禁用所有标签页的同步滚动。"""
+        self._sync_scrolling_enabled = enabled
+        for i in range(self._tab_widget.count()):
+            tab = self._tab_widget.widget(i)
+            if isinstance(tab, Tab):
+                tab.set_sync_scrolling(enabled)
+
+    # ═══════════════════════════════════════════════════════
     #  主题切换
     # ═══════════════════════════════════════════════════════
 
@@ -732,6 +755,15 @@ class MainWindow(QMainWindow):
         QApplication.instance().setStyleSheet(theme.qss)
         self._engine.theme = theme.engine_theme
 
+        # LaTeX 主题 body max-width 在 QTextBrowser 中可能溢出 → 禁用水平滚动
+        latex_mode = theme.engine_theme == "latex"
+        scroll_policy = (Qt.ScrollBarPolicy.ScrollBarAlwaysOff if latex_mode
+                         else Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        for i in range(self._tab_widget.count()):
+            tab = self._tab_widget.widget(i)
+            if isinstance(tab, Tab):
+                tab.preview.setHorizontalScrollBarPolicy(scroll_policy)
+
         # 关闭按钮 SVG 图标
         icons_dir = Path(__file__).resolve().parent.parent / "resources" / "icons"
         close_file = "close-dark.svg" if "暗色" in theme_name else "close-light.svg"
@@ -743,21 +775,29 @@ class MainWindow(QMainWindow):
         # 同步所有标签页的行号颜色
         if "暗色" in theme_name:
             bg, fg = "#1e1e1e", "#777"
+            caret_color = "#d4d4d4"
         else:
             bg, fg = "#f0f0f0", "#999"
+            caret_color = "#222222"
 
         for i in range(self._tab_widget.count()):
             tab = self._tab_widget.widget(i)
             if isinstance(tab, Tab):
                 tab.editor.set_line_number_colors(bg, fg)
+                # 光标宽度加大 + viewport palette 确保光标可见
+                tab.editor.setCursorWidth(2)
+                vp = tab.editor.viewport()
+                palette = vp.palette()
+                palette.setColor(QPalette.ColorRole.Text, QColor(caret_color))
+                vp.setPalette(palette)
 
         self._update_preview()
 
-        # 菜单中标记当前主题
+        # 菜单中标记当前主题（用 data() 精确匹配，避免子串误判）
         view_menu = self.menuBar().actions()[2]  # 视图菜单
         for action in view_menu.menu().actions():
             action.setCheckable(True)
-            action.setChecked(theme_name in action.text())
+            action.setChecked(action.data() == theme_name)
 
         self._update_status(f"主题: {theme_name}")
 

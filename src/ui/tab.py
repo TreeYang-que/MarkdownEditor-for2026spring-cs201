@@ -36,9 +36,44 @@ class Tab(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self._splitter)
 
+        # ── 同步滚动 ──────────────────────────────────
+        self._sync_scrolling: bool = True
+        self._syncing: bool = False
+
+        editor_sb = self._editor.verticalScrollBar()
+        preview_sb = self._preview.verticalScrollBar()
+        editor_sb.valueChanged.connect(
+            lambda v: self._on_editor_scrolled(v, editor_sb, preview_sb))
+        preview_sb.valueChanged.connect(
+            lambda v: self._on_preview_scrolled(v, editor_sb, preview_sb))
+
         # ── 信号转发 ──────────────────────────────────
         self._editor.textChanged.connect(self.text_changed.emit)
         self._editor.markdown_file_dropped.connect(self.markdown_file_dropped.emit)
+
+    # ── 同步滚动 ──────────────────────────────────────
+
+    def set_sync_scrolling(self, enabled: bool) -> None:
+        """启用或禁用编辑区与预览区的同步滚动。"""
+        self._sync_scrolling = enabled
+
+    def _on_editor_scrolled(self, value: int, editor_sb, preview_sb) -> None:
+        """编辑器滚动 → 按比例同步到预览区。"""
+        if self._syncing or not self._sync_scrolling:
+            return
+        self._syncing = True
+        ratio = value / max(editor_sb.maximum(), 1)
+        preview_sb.setValue(int(ratio * preview_sb.maximum()))
+        self._syncing = False
+
+    def _on_preview_scrolled(self, value: int, editor_sb, preview_sb) -> None:
+        """预览区滚动 → 按比例同步到编辑器。"""
+        if self._syncing or not self._sync_scrolling:
+            return
+        self._syncing = True
+        ratio = value / max(preview_sb.maximum(), 1)
+        editor_sb.setValue(int(ratio * editor_sb.maximum()))
+        self._syncing = False
 
     # ── 属性 ──────────────────────────────────────────
 
