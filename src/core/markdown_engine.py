@@ -59,10 +59,11 @@ class MarkdownEngine:
 
     def __init__(self):
         self._md: Markdown | None = None
+        self._code_css: str = ""
         self._setup()
 
     def _setup(self) -> None:
-        """配置 Markdown 解析器及扩展。"""
+        """配置 Markdown 解析器及扩展，并预生成 Pygments CSS。"""
         extensions: list[str | Extension] = [
             "fenced_code",          # 围栏代码块
             "tables",               # 表格
@@ -91,6 +92,13 @@ class MarkdownEngine:
             output_format="html",
         )
 
+        # 预生成 Pygments 代码高亮 CSS（初始化时执行一次，避免每次预览重复构造）
+        try:
+            from pygments.formatters import HtmlFormatter
+            self._code_css = HtmlFormatter().get_style_defs(".highlight")
+        except ImportError:
+            self._code_css = ""
+
     def convert(self, markdown_text: str) -> str:
         """将 Markdown 文本转换为 HTML。
 
@@ -116,12 +124,6 @@ class MarkdownEngine:
         Returns:
             完整的 HTML 文档字符串。
         """
-        try:
-            from pygments.formatters import HtmlFormatter
-            code_css = HtmlFormatter().get_style_defs(".highlight")
-        except ImportError:
-            code_css = ""
-
         # 仅预览模式下注入公式标记 CSS；导出 HTML 由浏览器端 MathJax 渲染
         math_css = (
             _MATH_PREVIEW_LIGHT_CSS + _MATH_PREVIEW_DARK_CSS
@@ -145,7 +147,7 @@ MathJax = {{
 <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js" async>
 </script>
 <style>
-{code_css}
+{self._code_css}
 
 body {{
     font-family: "Microsoft YaHei", "PingFang SC", "Noto Sans SC", -apple-system, sans-serif;

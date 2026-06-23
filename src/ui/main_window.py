@@ -4,7 +4,7 @@
 
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer, QThread, QObject, pyqtSignal
 from PyQt6.QtGui import QAction, QKeySequence, QFont, QShortcut
 from PyQt6.QtWidgets import (
     QApplication,
@@ -22,6 +22,37 @@ from ..themes.style import DEFAULT_THEME, THEMES, Theme
 from .editor_widget import EditorWidget
 from .preview_widget import PreviewWidget
 from .toolbar import MarkdownToolbar
+
+
+class _PreviewWorker(QObject):
+    """后台线程：执行 Markdown → HTML 转换，释放主线程 UI。"""
+
+    # — 内部信号：跨线程触发实际转换逻辑 —
+    _do_convert = pyqtSignal(str, int)
+    # — 结果信号：转换完成后回传主线程 —
+    finished = pyqtSignal(str, int)
+
+    def __init__(self, engine: MarkdownEngine):
+        super().__init__()
+        self._engine = engine
+        # 连接到工作线程内部的槽（该连接在工作线程中执行，因此是直接连接）
+        self._do_convert.connect(self._on_convert)
+
+    def _on_convert(self, text: str, request_id: int) -> None:
+        """在后台线程中执行转换（由 _do_convert 信号触发）。"""
+        if not text.strip():
+            self.finished.emit("", request_id)
+            return
+        try:
+            body = self._engine.convert(text)
+            html = self._engine.wrap_html(body, preview_mode=True)
+            self.finished.emit(html, request_id)
+        except Exception:
+            self.finished.emit("", request_id)
+
+    def request(self, text: str, request_id: int) -> None:
+        """主线程调用：发起一次异步转换请求。"""
+        self._do_convert.emit(text, request_id)
 
 
 class MainWindow(QMainWindow):
@@ -51,6 +82,14 @@ class MainWindow(QMainWindow):
         self._setup_statusbar()
         self._connect_signals()
 
+        # ── 后台预览线程 ──────────────────────────────
+        self._preview_thread = QThread(self)
+        self._preview_worker = _PreviewWorker(self._engine)
+        self._preview_worker.moveToThread(self._preview_thread)
+        # 工作线程完成后将结果回传给主线程
+        self._preview_worker.finished.connect(self._on_preview_ready)
+        self._preview_thread.start()
+
         # ── 初始主题 ──────────────────────────────────
         self._current_theme: str = DEFAULT_THEME
         self._apply_theme(DEFAULT_THEME)
@@ -60,6 +99,9 @@ class MainWindow(QMainWindow):
         self._preview_timer.setSingleShot(True)
         self._preview_timer.setInterval(300)
         self._preview_timer.timeout.connect(self._update_preview)
+
+        # 转换请求计数器（用于丢弃过期结果）
+        self._preview_request_id: int = 0
 
     # ── 菜单栏 ────────────────────────────────────────
 
@@ -301,19 +343,22 @@ class MainWindow(QMainWindow):
         self._preview_timer.start()
 
     def _update_preview(self) -> None:
-        """执行 Markdown → HTML 转换并更新预览。"""
+        """发起异步 Markdown → HTML 转换（后台线程执行）。"""
         text = self._editor.toPlainText()
         if not text.strip():
             self._preview.show_placeholder()
             return
 
-        try:
-            body = self._engine.convert(text)
-            html = self._engine.wrap_html(body, preview_mode=True)
-            self._preview.show_preview(html)
-        except Exception:
-            # 解析错误时静默忽略，保持上次预览内容
-            pass
+        self._preview_request_id += 1
+        self._preview_worker.request(text, self._preview_request_id)
+
+    def _on_preview_ready(self, html: str, request_id: int) -> None:
+        """后台转换完成，回主线程更新预览（丢弃过期结果）。"""
+        if request_id != self._preview_request_id:
+            return  # 用户继续编辑产生了更新的请求，丢弃此结果
+        if not html:
+            return
+        self._preview.show_preview(html)
 
     # ── 格式化工具 ────────────────────────────────────
 
@@ -392,8 +437,11 @@ class MainWindow(QMainWindow):
         )
 
     def closeEvent(self, event) -> None:
-        """关闭窗口前检查未保存内容。"""
-        if self._maybe_save():
-            event.accept()
-        else:
+        """关闭窗口前检查未保存内容，并停止后台线程。"""
+        if not self._maybe_save():
             event.ignore()
+            return
+        event.accept()
+        # 停止后台预览线程
+        self._preview_thread.quit()
+        self._preview_thread.wait()
