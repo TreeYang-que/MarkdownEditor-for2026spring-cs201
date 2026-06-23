@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
 )
 
 from ..core.file_manager import FileManager
+from ..core.font_manager import FontManager, RECOMMENDED_FONTS
 from ..core.markdown_engine import MarkdownEngine
 from ..themes.style import DEFAULT_THEME, THEMES, Theme
 from .editor_widget import EditorWidget
@@ -38,6 +39,13 @@ class MainWindow(QMainWindow):
         # ── 核心模块 ──────────────────────────────────
         self._engine = MarkdownEngine()
         self._file_manager = FileManager()
+
+        # 字体管理器
+        fonts_dir = Path(__file__).resolve().parent.parent / "resources" / "fonts"
+        self._font_manager = FontManager(fonts_dir)
+        loaded = self._font_manager.load_local_fonts()
+        if loaded > 0:
+            print(f"[FontManager] 已加载 {loaded} 个本地字体文件")
 
         # ── UI 组件 ───────────────────────────────────
         self._editor = EditorWidget()
@@ -157,6 +165,9 @@ class MainWindow(QMainWindow):
             )
             view_menu.addAction(action)
 
+        view_menu.addSeparator()
+        self._setup_font_menu(view_menu)
+
         # ── 帮助菜单 ──
         help_menu = menubar.addMenu("帮助(&H)")
 
@@ -259,9 +270,11 @@ class MainWindow(QMainWindow):
             return
 
         try:
+            font_css = self._get_font_face_css(preview_mode=False)
             html = self._engine.wrap_html(
                 self._engine.convert(self._editor.toPlainText()),
                 title=Path(path).stem,
+                font_face_css=font_css,
             )
             exported = self._file_manager.export_html(html, path)
             self._update_status(f"已导出: {exported}")
@@ -284,7 +297,9 @@ class MainWindow(QMainWindow):
 
         try:
             body = self._engine.convert(text)
-            html = self._engine.wrap_html(body, preview_mode=True)
+            font_css = self._get_font_face_css(preview_mode=True)
+            html = self._engine.wrap_html(body, preview_mode=True,
+                                          font_face_css=font_css)
             self._preview.show_preview(html)
         except Exception:
             # 解析错误时静默忽略，保持上次预览内容
@@ -309,6 +324,100 @@ class MainWindow(QMainWindow):
             )
         self._editor.setTextCursor(cursor)
         self._editor.setFocus()
+
+    # ── 字体管理 ──────────────────────────────────────
+
+    def _get_font_face_css(self, preview_mode: bool) -> str:
+        """收集所有可用字体的 @font-face CSS，以及当前激活字体的覆盖规则。"""
+        parts = []
+        for key, entry in RECOMMENDED_FONTS.items():
+            if not self._font_manager.is_usable(key):
+                continue
+            if preview_mode:
+                css = self._font_manager.get_preview_font_face_css(key)
+            else:
+                css = self._font_manager.get_font_face_css(key)
+            if css:
+                parts.append(css)
+        # 如果选中了某字体，追加一条 body font-family 覆盖
+        if self._font_manager.active_font:
+            entry = RECOMMENDED_FONTS.get(self._font_manager.active_font)
+            if entry and self._font_manager.is_usable(entry.key):
+                parts.append(
+                    f'body {{ font-family: {entry.css_fallback} !important; }}'
+                )
+        return "\n".join(parts)
+
+    def _setup_font_menu(self, view_menu) -> None:
+        """初始化视图 → 字体子菜单。"""
+        font_menu = view_menu.addMenu("字体(&F)")
+        self._populate_font_menu_actions(font_menu)
+
+    def _populate_font_menu_actions(self, font_menu) -> None:
+        """填充字体子菜单项（可重复调用以刷新）。"""
+        default_action = QAction("系统默认", self)
+        default_action.setCheckable(True)
+        default_action.setChecked(self._font_manager.active_font is None)
+        default_action.triggered.connect(
+            lambda: self._on_font_select(None)
+        )
+        font_menu.addAction(default_action)
+        font_menu.addSeparator()
+
+        for key, entry in RECOMMENDED_FONTS.items():
+            available = self._font_manager.is_usable(key)
+            action = QAction(entry.description, self)
+            action.setCheckable(True)
+            action.setChecked(self._font_manager.active_font == key)
+            action.setEnabled(available)
+            action.triggered.connect(
+                lambda checked, k=key: self._on_font_select(k)
+            )
+            font_menu.addAction(action)
+
+            if not available:
+                dl_action = QAction(f"  ⬇ 下载 {entry.family_name}", self)
+                dl_action.triggered.connect(
+                    lambda checked, k=key: self._on_download_font(k)
+                )
+                font_menu.addAction(dl_action)
+
+    def _on_font_select(self, key: str | None) -> None:
+        """选择当前字体并刷新预览。"""
+        self._font_manager.active_font = key
+        self._rebuild_font_menu()
+        self._update_preview()
+        name = RECOMMENDED_FONTS[key].family_name if key else "系统默认"
+        self._update_status(f"字体: {name}")
+
+    def _on_download_font(self, key: str) -> None:
+        """后台下载字体，完成后刷新菜单和预览。"""
+        entry = RECOMMENDED_FONTS.get(key)
+        if entry is None:
+            return
+
+        self._update_status(f"正在下载 {entry.family_name} ...")
+
+        def on_done(k: str) -> None:
+            self._font_manager.load_local_fonts()
+            self._update_status(f"字体 {entry.family_name} 下载完成")
+            self._rebuild_font_menu()
+            self._update_preview()
+
+        def on_error(k: str, err: str) -> None:
+            self._update_status(f"下载失败: {err}")
+            QMessageBox.warning(self, "下载失败",
+                                f"字体 {entry.family_name} 下载失败:\n{err}")
+
+        self._font_manager.download_font(key, on_done=on_done, on_error=on_error)
+
+    def _rebuild_font_menu(self) -> None:
+        """重建字体子菜单以反映最新状态（下载完成后调用）。"""
+        view_menu = self.menuBar().actions()[2]
+        font_menu_action = view_menu.menu().actions()[-1]
+        font_menu = font_menu_action.menu()
+        font_menu.clear()
+        self._populate_font_menu_actions(font_menu)
 
     # ── 主题切换 ──────────────────────────────────────
 
