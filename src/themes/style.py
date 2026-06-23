@@ -159,6 +159,52 @@ QScrollBar::handle:horizontal {
 QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
     width: 0px;
 }
+
+/* ── 标签页栏 ── */
+QTabWidget::pane {
+    border: none;
+    background-color: #ffffff;
+}
+
+QTabBar {
+    background-color: #fdf6ec;
+    border-bottom: 1px solid #e8dcc8;
+}
+
+QTabBar::tab {
+    background-color: #f8efe0;
+    color: #888;
+    padding: 6px 14px;
+    margin-right: 2px;
+    border: 1px solid #e8dcc8;
+    border-bottom: none;
+    border-top-left-radius: 6px;
+    border-top-right-radius: 6px;
+    font-size: 12px;
+}
+
+QTabBar::tab:selected {
+    background-color: #ffffff;
+    color: #333;
+    border-bottom: 2px solid #ffffff;
+}
+
+QTabBar::tab:hover:!selected {
+    background-color: #faf5ea;
+    color: #555;
+}
+
+QTabBar::close-button {
+    subcontrol-position: right;
+    margin: 2px 2px 0 6px;
+    border-radius: 3px;
+    width: 14px;
+    height: 14px;
+}
+
+QTabBar::close-button:hover {
+    background-color: rgba(0, 0, 0, 0.12);
+}
 """
 
 LIGHT_PREVIEW_CSS = """
@@ -229,7 +275,7 @@ QToolButton {
     border: 1px solid transparent;
     border-radius: 4px;
     font-size: 13px;
-    color: #ccc;
+    color: #ddd;
 }
 
 QToolButton:hover {
@@ -244,7 +290,7 @@ QToolButton:pressed {
 QStatusBar {
     background-color: #2d2d2d;
     border-top: 1px solid #3e3e3e;
-    color: #999;
+    color: #aaa;
     font-size: 12px;
     padding: 2px 8px;
 }
@@ -309,6 +355,52 @@ QScrollBar::handle:horizontal {
 
 QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
     width: 0px;
+}
+
+/* ── 标签页栏 ── */
+QTabWidget::pane {
+    border: none;
+    background-color: #1e1e1e;
+}
+
+QTabBar {
+    background-color: #252526;
+    border-bottom: 1px solid #3e3e3e;
+}
+
+QTabBar::tab {
+    background-color: #2d2d2d;
+    color: #888;
+    padding: 6px 14px;
+    margin-right: 2px;
+    border: 1px solid #3e3e3e;
+    border-bottom: none;
+    border-top-left-radius: 6px;
+    border-top-right-radius: 6px;
+    font-size: 12px;
+}
+
+QTabBar::tab:selected {
+    background-color: #1e1e1e;
+    color: #ccc;
+    border-bottom: 2px solid #1e1e1e;
+}
+
+QTabBar::tab:hover:!selected {
+    background-color: #333;
+    color: #aaa;
+}
+
+QTabBar::close-button {
+    subcontrol-position: right;
+    margin: 2px 2px 0 6px;
+    border-radius: 3px;
+    width: 14px;
+    height: 14px;
+}
+
+QTabBar::close-button:hover {
+    background-color: rgba(255, 255, 255, 0.12);
 }
 """
 

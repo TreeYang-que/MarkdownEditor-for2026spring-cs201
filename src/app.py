@@ -24,6 +24,12 @@ class MarkdownApp(QApplication):
         # 高 DPI 支持
         self.setStyle("Fusion")
 
+        # 应用图标
+        icons_dir = Path(__file__).resolve().parent / "resources" / "icons"
+        icon_path = icons_dir / "256.ico"
+        if icon_path.exists():
+            self.setWindowIcon(QIcon(str(icon_path)))
+
     @staticmethod
     def launch() -> int:
         """启动应用程序。

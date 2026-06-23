@@ -52,11 +52,17 @@ class EditorWidget(QPlainTextEdit):
 
     TAB_SPACES = 4
 
+    # 拖入 Markdown 文件时发出此信号，由 MainWindow 打开
+    markdown_file_dropped = pyqtSignal(str)
+
     # 图片文件扩展名
     IMAGE_EXTENSIONS = {
         ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg",
         ".bmp", ".ico", ".tiff", ".tif", ".apng", ".avif",
     }
+
+    # Markdown 文件扩展名（拖入时打开而非引用）
+    MARKDOWN_EXTENSIONS = {".md", ".markdown", ".mdown", ".mkd"}
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -71,7 +77,7 @@ class EditorWidget(QPlainTextEdit):
         editor_font = _find_available_font(
             "Cascadia Code", _FALLBACK_FONTS, fixed_pitch=True
         )
-        font = QFont(editor_font, 13)
+        font = QFont(editor_font, 14)
         font.setStyleHint(QFont.StyleHint.Monospace)
         self.setFont(font)
         self.setTabStopDistance(
@@ -142,6 +148,7 @@ class EditorWidget(QPlainTextEdit):
         """绘制行号。"""
         painter = QPainter(self._line_number_area)
         painter.fillRect(event.rect(), QColor(self._line_number_bg))
+        painter.setFont(self.font())  # 行号字体与编辑器一致，避免主题切换时字体差异
 
         block = self.firstVisibleBlock()
         block_number = block.blockNumber()
@@ -248,7 +255,7 @@ class EditorWidget(QPlainTextEdit):
             super().dragEnterEvent(event)
 
     def dropEvent(self, event) -> None:
-        """处理文件拖放 —— 插入 Markdown 引用链接。"""
+        """处理文件拖放 —— 单个 .md 文件直接打开，其他插入引用链接。"""
         urls = event.mimeData().urls()
         if urls:
             local_paths: list[str] = []
@@ -256,6 +263,12 @@ class EditorWidget(QPlainTextEdit):
                 if url.isLocalFile():
                     local_paths.append(url.toLocalFile())
             if local_paths:
+                # 单个 Markdown 文件 → 通知 MainWindow 打开
+                if len(local_paths) == 1:
+                    ext = Path(local_paths[0]).suffix.lower()
+                    if ext in self.MARKDOWN_EXTENSIONS:
+                        self.markdown_file_dropped.emit(local_paths[0])
+                        return
                 self._insert_file_links(local_paths)
                 return
         super().dropEvent(event)

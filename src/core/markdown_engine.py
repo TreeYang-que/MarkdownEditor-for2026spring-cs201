@@ -62,18 +62,19 @@ hr { border: none; border-top: 2px solid #eee; margin: 2em 0; }
 # ── 默认主题暗色预览适配 ─────────────────────────────────
 
 _DEFAULT_PREVIEW_DARK_CSS = """
-body.dark { background: #1e1e1e; color: #ccc; }
+body.dark { background: #1e1e1e; color: #e0e0e0; }
 body.dark h1, body.dark h2, body.dark h3,
 body.dark h4, body.dark h5, body.dark h6 { color: #eee; }
 body.dark h1 { border-bottom-color: #569cd6; }
 body.dark h2 { border-bottom-color: #444; }
-body.dark code { background: #2d2d2d; color: #f48771; }
-body.dark pre { background: #2d2d2d; border-color: #444; }
-body.dark blockquote { background: #252526; border-left-color: #569cd6; color: #aaa; }
+body.dark code { background: #252526; color: #f48771; }
+body.dark pre { background: #151515; border-color: #3e3e3e; }
+body.dark pre code { background: transparent; }
+body.dark blockquote { background: #252526; border-left-color: #569cd6; color: #bbb; }
 body.dark th { background: #264f78; }
 body.dark td { border-color: #444; }
 body.dark tr:nth-child(even) { background: #252525; }
-body.dark a { color: #569cd6; }
+body.dark a { color: #6db3f2; }
 body.dark hr { border-top-color: #444; }
 """
 
@@ -94,8 +95,8 @@ div.arithmatex {
 """
 
 _MATH_PREVIEW_DARK_CSS = """
-body.dark .arithmatex { background: #2d2040; border-color: #6b3fa0; color: #c4a2e8; }
-body.dark div.arithmatex { background: #252030; border-color: #5a3a8a; }
+body.dark .arithmatex { background: #1e1830; border-color: #6b3fa0; color: #c4a2e8; }
+body.dark div.arithmatex { background: #1a1530; border-color: #5a3a8a; }
 """
 
 # ═══════════════════════════════════════════════════════════════
@@ -230,7 +231,7 @@ div.arithmatex { display: block; text-align: center; margin: 1em 0; font-size: 1
 
 _LATEX_PREVIEW_DARK_CSS = """
 body.dark {
-    background: #1e1e1e; color: #dcdcdc;
+    background: #1e1e1e; color: #e0e0e0;
 }
 body.dark h1, body.dark h2, body.dark h3,
 body.dark h4, body.dark h5, body.dark h6 { color: #dddddd; }
@@ -242,7 +243,10 @@ body.dark p code, body.dark li code {
     color: #8bb1f9; background-color: #161616;
     box-shadow: 0 0 1px 1px #141414;
 }
-body.dark pre { background: #263238; border-color: #444; }
+body.dark pre { background: #151515; border-color: #444; }
+body.dark pre code,
+body.dark .highlight,
+body.dark .highlight * { background: transparent; }
 body.dark blockquote { border-left-color: #888888; }
 body.dark table { border-top-color: #ccc; border-bottom-color: #ccc; }
 body.dark th { border-bottom-color: #ccc; }
@@ -420,7 +424,7 @@ class MarkdownEngine:
         # 预生成 Pygments 代码高亮 CSS（初始化时执行一次，避免每次预览重复构造）
         try:
             from pygments.formatters import HtmlFormatter
-            self._code_css = HtmlFormatter().get_style_defs(".highlight")
+            self._code_css = HtmlFormatter(nobackground=True).get_style_defs(".highlight")
         except ImportError:
             self._code_css = ""
 
@@ -437,6 +441,7 @@ class MarkdownEngine:
         preview_mode: bool = False,
         theme: str | None = None,
         font_face_css: str = "",
+        dark_mode: bool = False,
     ) -> str:
         """将 HTML body 包装为完整的 HTML 文档。
 
@@ -446,21 +451,25 @@ class MarkdownEngine:
             preview_mode: 是否用于预览面板（True 时注入公式/主题高亮 CSS）。
             theme: 主题名称 ("default" / "latex")，为 None 时使用引擎当前主题。
             font_face_css: 额外的 @font-face CSS（字体管理器提供）。
+            dark_mode: 是否使用暗色模式（为 body 添加 .dark 类以激活暗色 CSS）。
 
         Returns:
             完整的 HTML 文档字符串。
         """
         theme_name = theme or self._theme
+        body_tag = '<body class="dark">' if dark_mode else "<body>"
 
         if theme_name == "latex":
-            return self._wrap_latex(html_body, title, preview_mode, font_face_css)
-        return self._wrap_default(html_body, title, preview_mode, font_face_css)
+            return self._wrap_latex(html_body, title, preview_mode,
+                                    font_face_css, body_tag)
+        return self._wrap_default(html_body, title, preview_mode,
+                                  font_face_css, body_tag)
 
     # ── 默认主题包装 ──────────────────────────────────
 
     def _wrap_default(
         self, html_body: str, title: str, preview_mode: bool,
-        font_face_css: str = "",
+        font_face_css: str, body_tag: str,
     ) -> str:
         math_css = (
             _MATH_PREVIEW_LIGHT_CSS + _MATH_PREVIEW_DARK_CSS
@@ -488,7 +497,7 @@ MathJax = {{
 {_DEFAULT_PREVIEW_DARK_CSS}
 </style>
 </head>
-<body>
+{body_tag}
 {html_body}
 </body>
 </html>"""
@@ -497,7 +506,7 @@ MathJax = {{
 
     def _wrap_latex(
         self, html_body: str, title: str, preview_mode: bool,
-        font_face_css: str = "",
+        font_face_css: str, body_tag: str,
     ) -> str:
         if preview_mode:
             body_css = _LATEX_PREVIEW_LIGHT_CSS
@@ -530,7 +539,7 @@ MathJax = {{
 {dark_css}
 </style>
 </head>
-<body>
+{body_tag}
 {html_body}
 </body>
 </html>"""
