@@ -3,10 +3,12 @@
 """
 
 import logging
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from threading import Thread
 from urllib.request import urlretrieve
+
+from PyQt6.QtCore import QObject, pyqtSignal
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +17,6 @@ logger = logging.getLogger(__name__)
 #  COS 字体存储
 # ═══════════════════════════════════════════════════════════════
 
-# 腾讯云 COS 字体直链基地址（所有字体文件存放于此）
 FONT_BASE_URL = (
     "https://picture-for-public-1379103641.cos.ap-beijing.myqcloud.com/fonts"
 )
@@ -27,17 +28,15 @@ FONT_BASE_URL = (
 
 @dataclass
 class FontEntry:
-    """一条推荐字体记录。"""
-    key: str                                    # 内部标识
-    family_name: str                            # 字体族名（系统注册名 / CSS font-family）
-    css_fallback: str                           # CSS font-family 字符串（含回退）
+    key: str
+    family_name: str
+    css_fallback: str
     category: str                               # "serif" / "sans-serif" / "mono"
-    files: list[str] = field(default_factory=list)  # COS 上的字体文件名
-    description: str = ""                       # 中文描述
+    files: list[str] = field(default_factory=list)
+    description: str = ""
 
     @property
     def download_urls(self) -> list[str]:
-        """返回每个字体文件的完整 COS 下载地址。"""
         return [f"{FONT_BASE_URL}/{f}" for f in self.files]
 
 
@@ -48,10 +47,7 @@ RECOMMENDED_FONTS: dict[str, FontEntry] = {
         css_fallback='"Source Han Serif SC", "Noto Serif CJK SC", '
                      '"华文宋体", "宋体-简", "SimSun", serif',
         category="serif",
-        files=[
-            "SourceHanSerifCN-Regular.otf",
-            "SourceHanSerifCN-Bold.otf",
-        ],
+        files=["SourceHanSerifCN-Regular.otf", "SourceHanSerifCN-Bold.otf"],
         description="思源宋体 — Adobe/Google 开源宋体，适合正文排版",
     ),
     "source-han-sans": FontEntry(
@@ -60,10 +56,7 @@ RECOMMENDED_FONTS: dict[str, FontEntry] = {
         css_fallback='"Source Han Sans SC", "Noto Sans CJK SC", '
                      '"微软雅黑", "PingFang SC", sans-serif',
         category="sans-serif",
-        files=[
-            "SourceHanSansSC-Regular.otf",
-            "SourceHanSansSC-Bold.otf",
-        ],
+        files=["SourceHanSansSC-Regular.otf", "SourceHanSansSC-Bold.otf"],
         description="思源黑体 — Adobe/Google 开源黑体，适合标题和 UI",
     ),
     "lxgw-wenkai": FontEntry(
@@ -86,67 +79,69 @@ RECOMMENDED_FONTS: dict[str, FontEntry] = {
     ),
 }
 
-# 字体文件大小（字节），用于下载进度计算。None 表示首次运行时自动探测。
-# pylint: disable=line-too-long
-FONT_FILE_SIZES: dict[str, int]
-FONT_FILE_SIZES = {
+# 字体文件大小（字节），用于下载进度计算
+FONT_FILE_SIZES: dict[str, int] = {
     "SourceHanSerifCN-Regular.otf": 11_626_108,
-    "SourceHanSerifCN-Bold.otf": 13_731_606,
-    "SourceHanSansSC-Regular.otf": 13_433_469,
-    "SourceHanSansSC-Bold.otf": 14_739_026,
-    "LXGWWenKai-Regular.ttf": 13_233_580,
-    "LXGWWenKaiMono-Regular.ttf": 12_516_388,
+    "SourceHanSerifCN-Bold.otf":    13_731_606,
+    "SourceHanSansSC-Regular.otf":  13_433_469,
+    "SourceHanSansSC-Bold.otf":     14_739_026,
+    "LXGWWenKai-Regular.ttf":       13_233_580,
+    "LXGWWenKaiMono-Regular.ttf":   12_516_388,
 }
 
 
 # ═══════════════════════════════════════════════════════════════
-#  下载辅助函数
+#  下载辅助函数（纯 Python，无 Qt 依赖，在工作线程中调用）
 # ═══════════════════════════════════════════════════════════════
 
-def _dl_single(url: str, dest_path: Path, on_progress: callable) -> None:
-    """从 COS 下载单个字体文件（带重试）。"""
-    import time
-
+def _dl_single(url: str, dest_path: Path, on_progress: callable = None) -> None:
+    """从 COS 下载单个字体文件（带 3 次重试 + 指数量退避）。"""
     max_retries = 3
     for attempt in range(max_retries):
         try:
             urlretrieve(url, str(dest_path), on_progress)
-            return  # 成功
+            return
         except Exception:
             if attempt == max_retries - 1:
                 raise
-            time.sleep(1 * (2 ** attempt))  # 1s → 2s → 4s
+            time.sleep(1 * (2 ** attempt))
 
 
 def _download_font_files(
-    entry, dest: Path, on_progress: callable, on_error: callable, key: str
+    entry: FontEntry, dest: Path, on_progress: callable = None
 ) -> None:
-    """从 COS 逐文件下载字体（不再使用 zip 包）。"""
+    """从 COS 逐文件下载字体文件。"""
     files = entry.files
+    n = len(files)
+    total_bytes = sum(FONT_FILE_SIZES.get(f, 0) for f in files) or 1
+    downloaded_bytes = 0
+
     for idx, filename in enumerate(files):
         url = f"{FONT_BASE_URL}/{filename}"
         dest_path = dest / filename
+        file_size = FONT_FILE_SIZES.get(filename, 0)
 
         if dest_path.exists():
-            # 文件已存在，跳过下载
-            file_progress = FONT_FILE_SIZES.get(filename)
-            if file_progress and on_progress:
-                on_progress(min(int((idx + 1) / len(files) * 100), 100))
+            downloaded_bytes += file_size
+            if on_progress:
+                on_progress(min(int(downloaded_bytes / total_bytes * 100), 100))
             continue
 
-        # 单个文件下载进度回调（含文件索引，计算总体进度）
-        def _file_progress(count, block_size, total, _idx=idx, _n=len(files)):
+        # 带闭包捕获的进度回调（累计字节 → 百分比）
+        def _file_progress(
+            count: int, block_size: int, _total: int,
+            _idx: int = idx, _fs: int = file_size,
+        ) -> None:
+            nonlocal downloaded_bytes
+            cur = min(count * block_size, _fs) if _fs else count * block_size
+            pct = min(
+                int((downloaded_bytes + cur) / total_bytes * 100), 99
+            )
             if on_progress:
-                total_sz = FONT_FILE_SIZES.get(filename)
-                if total_sz and total_sz > 0:
-                    pct = min(int((_idx * total_sz + count * block_size) /
-                                   (_n * total_sz / len(files) * 2) * 100), 99)
-                else:
-                    if total > 0:
-                        pct = min(int((_idx * 100 + count * block_size / total * 100) / _n), 99)
                 on_progress(pct)
 
         _dl_single(url, dest_path, _file_progress)
+        downloaded_bytes += file_size
 
     if on_progress:
         on_progress(100)
@@ -162,7 +157,7 @@ class FontManager:
     def __init__(self, fonts_dir: Path | str):
         self._fonts_dir = Path(fonts_dir).resolve()
         self._fonts_dir.mkdir(parents=True, exist_ok=True)
-        self._active_font: str | None = None  # 用户当前选择的字体 key
+        self._active_font: str | None = None
 
     # ── 属性 ──────────────────────────────────────────
 
@@ -183,17 +178,12 @@ class FontManager:
     # ── 检测 ──────────────────────────────────────────
 
     def is_downloaded(self, key: str) -> bool:
-        """检查推荐字体是否已下载到本地 fonts 目录。"""
         entry = RECOMMENDED_FONTS.get(key)
         if entry is None:
             return False
-        return all(
-            (self._fonts_dir / f).exists()
-            for f in entry.files
-        )
+        return all((self._fonts_dir / f).exists() for f in entry.files)
 
     def is_system_installed(self, family_name: str) -> bool:
-        """检查字体是否已安装到操作系统。"""
         try:
             from PyQt6.QtGui import QFontDatabase
         except ImportError:
@@ -201,72 +191,23 @@ class FontManager:
         from PyQt6.QtWidgets import QApplication
         if QApplication.instance() is None:
             return False
-        families = QFontDatabase.families()
-        return family_name in families
+        return family_name in QFontDatabase.families()
 
     def list_available(self) -> list[dict]:
-        """列出所有推荐字体的状态。返回结构:
-        [{"key": "...", "name": "...", "downloaded": bool,
-          "installed": bool, "description": "..."}, ...]
-        """
-        result = []
-        for key, entry in RECOMMENDED_FONTS.items():
-            result.append({
-                "key": key,
-                "name": entry.family_name,
-                "description": entry.description,
-                "downloaded": self.is_downloaded(key),
-                "installed": self.is_system_installed(entry.family_name),
-                "active": self._active_font == key,
-            })
-        return result
+        return [{
+            "key": key,
+            "name": e.family_name,
+            "description": e.description,
+            "downloaded": self.is_downloaded(key),
+            "installed": self.is_system_installed(e.family_name),
+            "active": self._active_font == key,
+        } for key, e in RECOMMENDED_FONTS.items()]
 
     def is_usable(self, key: str) -> bool:
-        """字体是否可用（本地已下载 或 系统已安装）。"""
         entry = RECOMMENDED_FONTS.get(key)
         if entry is None:
             return False
-        return self.is_downloaded(key) or self.is_system_installed(
-            entry.family_name
-        )
-
-    # ── 下载 ──────────────────────────────────────────
-
-    def download_font(
-        self,
-        key: str,
-        on_progress: callable = None,
-        on_done: callable = None,
-        on_error: callable = None,
-    ) -> None:
-        """后台线程下载字体。自动识别 zip 包或单个 .ttf/.otf 文件。
-
-        Args:
-            key: 字体 key。
-            on_progress(percent: int): 进度回调。
-            on_done(key: str): 下载完成回调。
-            on_error(key: str, error: str): 出错回调。
-        """
-        entry = RECOMMENDED_FONTS.get(key)
-        if entry is None:
-            if on_error:
-                on_error(key, f"未知字体: {key}")
-            return
-
-        def _run() -> None:
-            try:
-                _download_font_files(
-                    entry, self._fonts_dir, on_progress, on_error, key
-                )
-                if on_done:
-                    on_done(key)
-            except Exception as e:
-                logger.exception("下载字体失败: %s", key)
-                if on_error:
-                    on_error(key, str(e))
-
-        t = Thread(target=_run, daemon=True)
-        t.start()
+        return self.is_downloaded(key) or self.is_system_installed(entry.family_name)
 
     # ── 注册 ──────────────────────────────────────────
 
@@ -349,3 +290,46 @@ class FontManager:
                 f'}}'
             )
         return "\n".join(lines)
+
+
+# ═══════════════════════════════════════════════════════════════
+#  FontDownloadWorker — QObject 工作线程（安全桥接
+#  下载线程与 Qt 主线程）
+# ═══════════════════════════════════════════════════════════════
+
+class _FontDownloadWorker(QObject):
+    """在 QThread 中执行字体下载，通过信号安全通知主线程。
+
+    使用方式（在 MainWindow 中）:
+        thread = QThread()
+        worker = _FontDownloadWorker(font_manager, key)
+        worker.moveToThread(thread)
+        worker.progress.connect(on_progress)   # int
+        worker.finished.connect(on_done)       # str
+        worker.error.connect(on_error)         # str, str
+        thread.started.connect(worker.run)
+        thread.start()
+    """
+
+    progress = pyqtSignal(int)          # 下载进度 0-100
+    finished = pyqtSignal(str)          # 字体 key
+    error = pyqtSignal(str, str)        # 字体 key, 错误信息
+
+    def __init__(self, font_manager: FontManager, key: str):
+        super().__init__()
+        self._fm = font_manager
+        self._key = key
+
+    def run(self) -> None:
+        """在工作线程中执行（由 QThread.started 信号触发）。"""
+        entry = RECOMMENDED_FONTS.get(self._key)
+        if entry is None:
+            self.error.emit(self._key, f"未知字体: {self._key}")
+            return
+        try:
+            _download_font_files(entry, self._fm.fonts_dir,
+                                 on_progress=self.progress.emit)
+            self.finished.emit(self._key)
+        except Exception as e:
+            logger.exception("下载字体失败: %s", self._key)
+            self.error.emit(self._key, str(e))

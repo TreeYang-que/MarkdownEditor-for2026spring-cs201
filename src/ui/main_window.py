@@ -4,20 +4,25 @@
 
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal
 from PyQt6.QtGui import QAction, QKeySequence, QFont
 from PyQt6.QtWidgets import (
     QApplication,
     QFileDialog,
     QMainWindow,
     QMessageBox,
+    QProgressDialog,
     QSplitter,
     QStatusBar,
     QWidget,
 )
 
 from ..core.file_manager import FileManager
-from ..core.font_manager import FontManager, RECOMMENDED_FONTS
+from ..core.font_manager import (
+    FontManager,
+    RECOMMENDED_FONTS,
+    _FontDownloadWorker,
+)
 from ..core.markdown_engine import MarkdownEngine
 from ..themes.style import DEFAULT_THEME, THEMES, Theme
 from .editor_widget import EditorWidget
@@ -391,25 +396,75 @@ class MainWindow(QMainWindow):
         self._update_status(f"字体: {name}")
 
     def _on_download_font(self, key: str) -> None:
-        """后台下载字体，完成后刷新菜单和预览。"""
+        """在后台线程下载字体，显示进度对话框。"""
         entry = RECOMMENDED_FONTS.get(key)
         if entry is None:
             return
 
-        self._update_status(f"正在下载 {entry.family_name} ...")
+        # ── 进度对话框 ──
+        progress_dlg = QProgressDialog(
+            f"正在下载 {entry.family_name} …", "取消", 0, 100, self,
+        )
+        progress_dlg.setWindowTitle("字体下载")
+        progress_dlg.setWindowModality(Qt.WindowModality.WindowModal)
+        progress_dlg.setMinimumDuration(0)  # 立即显示
+        progress_dlg.setValue(0)
 
-        def on_done(k: str) -> None:
-            self._font_manager.load_local_fonts()
-            self._update_status(f"字体 {entry.family_name} 下载完成")
-            self._rebuild_font_menu()
-            self._update_preview()
+        # ── 工作线程 ──
+        thread = QThread(self)
+        worker = _FontDownloadWorker(self._font_manager, key)
+        worker.moveToThread(thread)
 
-        def on_error(k: str, err: str) -> None:
-            self._update_status(f"下载失败: {err}")
-            QMessageBox.warning(self, "下载失败",
-                                f"字体 {entry.family_name} 下载失败:\n{err}")
+        # 信号连接
+        worker.progress.connect(progress_dlg.setValue)
 
-        self._font_manager.download_font(key, on_done=on_done, on_error=on_error)
+        worker.finished.connect(
+            lambda k: self._on_download_done(k, progress_dlg, thread, worker)
+        )
+        worker.error.connect(
+            lambda k, err: self._on_download_error(k, err, entry,
+                                                    progress_dlg, thread, worker)
+        )
+
+        # 取消按钮：终止线程
+        progress_dlg.canceled.connect(thread.quit)
+
+        # 线程结束后清理
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(worker.deleteLater)
+
+        thread.started.connect(worker.run)
+        thread.start()
+
+    def _on_download_done(
+        self, key: str, dlg: QProgressDialog, thread: QThread,
+        worker: _FontDownloadWorker,
+    ) -> None:
+        """下载完成（主线程回调）。"""
+        dlg.setValue(100)
+        dlg.close()
+        thread.quit()
+        thread.wait()
+        self._font_manager.load_local_fonts()
+        entry = RECOMMENDED_FONTS.get(key)
+        name = entry.family_name if entry else key
+        self._update_status(f"字体 {name} 下载完成")
+        self._rebuild_font_menu()
+        self._update_preview()
+        QMessageBox.information(self, "下载完成",
+                                f"字体「{name}」已下载并安装。")
+
+    def _on_download_error(
+        self, key: str, error: str, entry, dlg: QProgressDialog,
+        thread: QThread, worker: _FontDownloadWorker,
+    ) -> None:
+        """下载出错（主线程回调）。"""
+        dlg.close()
+        thread.quit()
+        thread.wait()
+        self._update_status(f"下载失败: {error}")
+        QMessageBox.warning(self, "下载失败",
+                            f"字体 {entry.family_name} 下载失败:\n{error}")
 
     def _rebuild_font_menu(self) -> None:
         """重建字体菜单（下载完成后调用）。"""
