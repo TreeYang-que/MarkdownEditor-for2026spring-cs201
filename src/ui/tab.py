@@ -2,6 +2,8 @@
 编辑器标签页 —— 封装单个文件的编辑器 + 预览面板 + 文件管理器。
 """
 
+import time as _time
+
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import QSplitter, QWidget
 
@@ -20,6 +22,10 @@ class Tab(QWidget):
         super().__init__(parent)
 
         self._file_manager = FileManager()
+
+        # ── 自动保存追踪 ──────────────────────────────
+        self._chars_since_save: int = 0          # 自上次保存后累计键盘活动次数
+        self._last_save_time: float = _time.time()  # 上次保存的时间戳
 
         # ── 编辑器 + 预览 ──────────────────────────────
         self._editor = EditorWidget()
@@ -48,8 +54,13 @@ class Tab(QWidget):
             lambda v: self._on_preview_scrolled(v, editor_sb, preview_sb))
 
         # ── 信号转发 ──────────────────────────────────
-        self._editor.textChanged.connect(self.text_changed.emit)
+        self._editor.textChanged.connect(self._on_text_changed)
         self._editor.markdown_file_dropped.connect(self.markdown_file_dropped.emit)
+
+    def _on_text_changed(self) -> None:
+        """编辑器内容变化时累加计数器并转发信号。"""
+        self._chars_since_save += 1
+        self.text_changed.emit()
 
     # ── 同步滚动 ──────────────────────────────────────
 
@@ -121,6 +132,31 @@ class Tab(QWidget):
     def set_base_dir(self, path: str | None) -> None:
         """设置基础目录（用于相对路径解析）。"""
         self._editor.set_base_dir(path)
+
+    # ── 自动保存 ──────────────────────────────────────
+
+    def mark_saved(self) -> None:
+        """保存成功后重置自动保存追踪状态。"""
+        self._chars_since_save = 0
+        self._last_save_time = _time.time()
+
+    def should_auto_save(self) -> bool:
+        """判断是否满足自动保存条件。
+
+        条件（全部满足）：
+        1. 有已保存的路径（不自动保存「未命名」新文件）
+        2. 处于修改状态
+        3. 内容非空
+        4. 编辑量 > 300 次键盘活动 或 距上次保存 > 15 分钟
+        """
+        if not self.current_path or not self.modified:
+            return False
+        if not self.editor_text.strip():
+            return False
+        elapsed = _time.time() - self._last_save_time
+        return self._chars_since_save > 300 or elapsed > 900
+
+    # ── 状态快照 ──────────────────────────────────────
 
     def memento(self) -> dict:
         """保存标签页状态快照，用于缓存已渲染的预览。"""

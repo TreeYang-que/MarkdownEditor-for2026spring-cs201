@@ -17,14 +17,18 @@ class PreviewWidget(QTextBrowser):
         self.setPlaceholderText("预览区域 — 在左侧输入 Markdown 即可实时预览")
 
     def show_preview(self, html: str) -> None:
-        """显示渲染后的 HTML。
+        """显示渲染后的 HTML，保持原来的滚动位置。
 
         Args:
             html: 完整的 HTML 文档字符串。
         """
+        sb = self.verticalScrollBar()
+        saved_value = sb.value()
+
         self.setHtml(html)
-        # 滚动到顶部
-        self.verticalScrollBar().setValue(0)
+
+        # 恢复绝对滚动位置，不超过新的最大值
+        sb.setValue(min(saved_value, sb.maximum()))
 
     def show_placeholder(self) -> None:
         """显示占位提示。"""

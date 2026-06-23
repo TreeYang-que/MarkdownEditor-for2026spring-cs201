@@ -4,8 +4,8 @@
 
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, QTimer, QThread, QObject, pyqtSignal
-from PyQt6.QtGui import QAction, QColor, QKeySequence, QPalette, QShortcut
+from PyQt6.QtCore import Qt, QSettings, QTimer, QThread, QObject, pyqtSignal
+from PyQt6.QtGui import QAction, QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -104,19 +104,31 @@ class MainWindow(QMainWindow):
         self._current_theme: str = DEFAULT_THEME
         self._dark_mode: bool = False
         self._sync_scrolling_enabled: bool = True
+        self._cursor_position_enabled: bool = False  # 与同步滚动互斥
+        self._caret_color: str = "#222222"  # 由 _apply_theme 更新
         self._apply_theme(DEFAULT_THEME)
 
-        # 预览防抖定时器（300ms）
+        # 预览防抖定时器（间隔按当前模式动态调整）
         self._preview_timer = QTimer(self)
         self._preview_timer.setSingleShot(True)
-        self._preview_timer.setInterval(300)
         self._preview_timer.timeout.connect(self._update_preview)
 
         # 转换请求计数器（用于丢弃过期结果）
         self._preview_request_id: int = 0
 
+        # ── 自动保存定时器（60 秒间隔） ────────────────
+        self._autosave_timer = QTimer(self)
+        self._autosave_timer.setInterval(60_000)
+        self._autosave_timer.timeout.connect(self._autosave_tick)
+        self._autosave_timer.start()
+
         # ── 创建初始空白标签页 ────────────────────────
         self._on_new()
+
+        # ── 初始化后异步任务 ──────────────────────────
+        QTimer.singleShot(0, self._restore_settings)
+        QTimer.singleShot(100, self._process_pending_files)
+        QTimer.singleShot(200, self._check_first_launch)
 
     # ═══════════════════════════════════════════════════════
     #  菜单栏
@@ -218,11 +230,17 @@ class MainWindow(QMainWindow):
         # ── 视图菜单 ──
         view_menu = menubar.addMenu("视图(&V)")
 
-        sync_scroll_action = QAction("同步滚动(&Y)", self)
-        sync_scroll_action.setCheckable(True)
-        sync_scroll_action.setChecked(True)
-        sync_scroll_action.triggered.connect(self._on_toggle_sync_scroll)
-        view_menu.addAction(sync_scroll_action)
+        self._sync_scroll_action = QAction("同步滚动(&Y)", self)
+        self._sync_scroll_action.setCheckable(True)
+        self._sync_scroll_action.setChecked(True)
+        self._sync_scroll_action.triggered.connect(self._on_toggle_sync_scroll)
+        view_menu.addAction(self._sync_scroll_action)
+
+        self._cursor_pos_action = QAction("光标定位(&C)", self)
+        self._cursor_pos_action.setCheckable(True)
+        self._cursor_pos_action.setChecked(False)
+        self._cursor_pos_action.triggered.connect(self._on_toggle_cursor_position)
+        view_menu.addAction(self._cursor_pos_action)
 
         view_menu.addSeparator()
 
@@ -287,6 +305,7 @@ class MainWindow(QMainWindow):
         """连接单个标签页的信号。"""
         tab.text_changed.connect(self._on_text_changed)
         tab.markdown_file_dropped.connect(self._on_drop_markdown_file)
+        tab.editor.cursorPositionChanged.connect(self._on_cursor_changed)
 
     # ═══════════════════════════════════════════════════════
     #  格式化快捷键
@@ -320,8 +339,12 @@ class MainWindow(QMainWindow):
     # ═══════════════════════════════════════════════════════
 
     def _add_tab(self, tab: Tab, title: str = "未命名", switch: bool = True) -> int:
-        """添加标签页并连接信号。"""
+        """添加标签页并连接信号，同时应用当前主题的行号/光标颜色。"""
         tab.set_sync_scrolling(self._sync_scrolling_enabled)
+        if "暗色" in self._current_theme:
+            self._apply_cursor_settings_to_tab(tab, "#1e1e1e", "#777")
+        else:
+            self._apply_cursor_settings_to_tab(tab, "#f0f0f0", "#999")
         self._connect_tab_signals(tab)
         idx = self._tab_widget.addTab(tab, title)
         if switch:
@@ -466,6 +489,7 @@ class MainWindow(QMainWindow):
         """执行保存操作。"""
         try:
             saved = tab.file_manager.save_file(tab.editor_text, path)
+            tab.mark_saved()  # 重置自动保存计数器
             tab.set_base_dir(str(Path(saved).parent))
             idx = self._tab_widget.indexOf(tab)
             if idx >= 0:
@@ -505,10 +529,26 @@ class MainWindow(QMainWindow):
     # ═══════════════════════════════════════════════════════
 
     def _maybe_save_tab(self, tab: Tab) -> bool:
-        """如果有未保存的修改，询问用户。返回 False 表示取消。"""
+        """关闭标签页时处理未保存内容。返回 False 表示取消。
+
+        策略：
+        - 有保存路径 → 静默自动保存，不询问
+        - 无保存路径（未命名新文件）→ 弹出保存/放弃/取消对话框
+        """
         if not tab.modified:
             return True
 
+        # 已有路径 → 自动静默保存
+        if tab.current_path:
+            try:
+                tab.file_manager.save_file(tab.editor_text, tab.current_path)
+                tab.mark_saved()
+                tab.set_base_dir(str(Path(tab.current_path).parent))
+                return True
+            except IOError:
+                pass  # 自动保存失败 → 降级为手动询问
+
+        # 未命名文件 → 弹出询问框
         result = QMessageBox.question(
             self, "未保存的修改",
             f"「{tab.filename}」有未保存的修改，是否保存？",
@@ -517,11 +557,8 @@ class MainWindow(QMainWindow):
             | QMessageBox.StandardButton.Cancel,
         )
         if result == QMessageBox.StandardButton.Save:
-            if tab.current_path:
-                self._do_save_tab(tab, tab.current_path)
-            else:
-                self._on_save_as()
-            return not tab.modified  # 用户可能取消保存对话框
+            self._on_save_as()  # 会弹出保存路径对话框
+            return not tab.modified
         elif result == QMessageBox.StandardButton.Discard:
             return True
         return False  # Cancel
@@ -542,7 +579,32 @@ class MainWindow(QMainWindow):
         # 只有活动标签页才更新窗口标题和启动预览
         if tab is self._active_tab:
             self._update_window_title()
-            self._preview_timer.start()
+            self._start_preview_debounce()
+
+    def _on_cursor_changed(self) -> None:
+        """光标位置变化时：若为光标定位模式则启动短防抖更新预览位置。"""
+        if not self._cursor_position_enabled:
+            return
+        tab = self._active_tab
+        if tab is None:
+            return
+        # sender() 是 EditorWidget，验证其属于当前活动标签页
+        editor = self.sender()
+        if tab.editor is not editor:
+            return
+        self._start_preview_debounce()
+
+    def _start_preview_debounce(self) -> None:
+        """按当前模式设置防抖间隔并启动定时器。
+
+        - 同步滚动 → 1000ms（减少频繁重渲染）
+        - 光标定位 / 无模式 → 300ms（快速响应）
+        """
+        if self._sync_scrolling_enabled:
+            self._preview_timer.setInterval(1000)
+        else:
+            self._preview_timer.setInterval(300)
+        self._preview_timer.start()
 
     def _update_preview(self) -> None:
         """发起异步 Markdown → HTML 转换（后台线程执行）。"""
@@ -560,12 +622,37 @@ class MainWindow(QMainWindow):
                                       dark_mode=self._dark_mode)
 
     def _on_preview_ready(self, html: str, request_id: int) -> None:
-        """后台转换完成，回主线程更新预览（丢弃过期结果）。"""
+        """后台转换完成，回主线程更新预览（丢弃过期结果）。
+
+        刷新 HTML 期间临时关闭该标签页的同步滚动，
+        避免 setHtml / setValue 触发的 scrollbar valueChanged
+        信号回弹到编辑区造成异常滚动。
+        """
         if request_id != self._preview_request_id:
             return
         if not html or self._active_tab is None:
             return
-        self._active_tab.preview.show_preview(html)
+
+        tab = self._active_tab
+
+        # 临时禁止同步滚动，防止 setHtml 触发的 scrollbar 事件干扰编辑区
+        tab.set_sync_scrolling(False)
+
+        # ── 光标定位模式：按光标所在行比例跳转预览 ──
+        if self._cursor_position_enabled:
+            editor = tab.editor
+            cursor = editor.textCursor()
+            block_number = cursor.blockNumber()
+            total_blocks = editor.blockCount()
+            cursor_ratio = block_number / max(total_blocks, 1)
+            tab.preview.show_preview(html)
+            preview_sb = tab.preview.verticalScrollBar()
+            preview_sb.setValue(int(cursor_ratio * preview_sb.maximum()))
+        else:
+            tab.preview.show_preview(html)
+
+        # 恢复同步滚动状态
+        tab.set_sync_scrolling(self._sync_scrolling_enabled)
 
     # ═══════════════════════════════════════════════════════
     #  格式化工具
@@ -655,6 +742,7 @@ class MainWindow(QMainWindow):
         self._font_manager.active_font = key
         self._rebuild_font_menu()
         self._update_preview()
+        QSettings().setValue("font", key)
         name = RECOMMENDED_FONTS[key].family_name if key else "系统默认"
         self._update_status(f"字体: {name}")
 
@@ -733,12 +821,30 @@ class MainWindow(QMainWindow):
     # ═══════════════════════════════════════════════════════
 
     def _on_toggle_sync_scroll(self, enabled: bool) -> None:
-        """全局开关：启用/禁用所有标签页的同步滚动。"""
+        """全局开关：启用/禁用所有标签页的同步滚动。
+        与光标定位互斥 —— 开启同步滚动时自动关闭光标定位。
+        """
         self._sync_scrolling_enabled = enabled
+        if enabled:
+            self._cursor_position_enabled = False
+            self._cursor_pos_action.setChecked(False)
         for i in range(self._tab_widget.count()):
             tab = self._tab_widget.widget(i)
             if isinstance(tab, Tab):
                 tab.set_sync_scrolling(enabled)
+
+    def _on_toggle_cursor_position(self, enabled: bool) -> None:
+        """启用/禁用光标定位预览。
+        与同步滚动互斥 —— 开启光标定位时自动关闭同步滚动。
+        """
+        self._cursor_position_enabled = enabled
+        if enabled:
+            self._sync_scrolling_enabled = False
+            self._sync_scroll_action.setChecked(False)
+            for i in range(self._tab_widget.count()):
+                tab = self._tab_widget.widget(i)
+                if isinstance(tab, Tab):
+                    tab.set_sync_scrolling(False)
 
     # ═══════════════════════════════════════════════════════
     #  主题切换
@@ -772,34 +878,45 @@ class MainWindow(QMainWindow):
             f"QTabBar::close-button {{ image: url({close_icon_path}); }}"
         )
 
-        # 同步所有标签页的行号颜色
+        # 同步所有标签页的行号颜色与光标
         if "暗色" in theme_name:
             bg, fg = "#1e1e1e", "#777"
-            caret_color = "#d4d4d4"
+            self._caret_color = "#d4d4d4"
         else:
             bg, fg = "#f0f0f0", "#999"
-            caret_color = "#222222"
+            self._caret_color = "#222222"
 
-        for i in range(self._tab_widget.count()):
-            tab = self._tab_widget.widget(i)
-            if isinstance(tab, Tab):
-                tab.editor.set_line_number_colors(bg, fg)
-                # 光标宽度加大 + viewport palette 确保光标可见
-                tab.editor.setCursorWidth(2)
-                vp = tab.editor.viewport()
-                palette = vp.palette()
-                palette.setColor(QPalette.ColorRole.Text, QColor(caret_color))
-                vp.setPalette(palette)
+        self._apply_cursor_settings(bg, fg)
 
         self._update_preview()
 
-        # 菜单中标记当前主题（用 data() 精确匹配，避免子串误判）
+        # 菜单中标记当前主题（仅对有 data() 的主题项；跳过同步滚动等）
         view_menu = self.menuBar().actions()[2]  # 视图菜单
         for action in view_menu.menu().actions():
-            action.setCheckable(True)
-            action.setChecked(action.data() == theme_name)
+            if action.data() is not None:
+                action.setCheckable(True)
+                action.setChecked(action.data() == theme_name)
+
+        # 持久化主题选择
+        QSettings().setValue("theme", theme_name)
 
         self._update_status(f"主题: {theme_name}")
+
+    def _apply_cursor_settings(self, line_bg: str = "", line_fg: str = "") -> None:
+        """对所有标签页重新应用行号颜色与光标设置。"""
+        for i in range(self._tab_widget.count()):
+            tab = self._tab_widget.widget(i)
+            if isinstance(tab, Tab):
+                self._apply_cursor_settings_to_tab(tab, line_bg, line_fg)
+
+    def _apply_cursor_settings_to_tab(self, tab: "Tab",
+                                       line_bg: str = "",
+                                       line_fg: str = "") -> None:
+        """对单个标签页应用行号颜色与光标设置。"""
+        if line_bg:
+            tab.editor.set_line_number_colors(line_bg, line_fg)
+        tab.editor.setCursorWidth(2)
+        tab.editor.set_caret_color(self._caret_color)
 
     # ═══════════════════════════════════════════════════════
     #  辅助方法
@@ -824,6 +941,134 @@ class MainWindow(QMainWindow):
             "<p>技术栈: Python + PyQt6 + Markdown + Pygments</p>",
         )
 
+    # ═══════════════════════════════════════════════════════
+    #  设置持久化
+    # ═══════════════════════════════════════════════════════
+
+    def _restore_settings(self) -> None:
+        """从 QSettings 恢复：主题、字体、窗口几何。
+        始终重新应用光标设置（viewport palette 在 show() 时会被 Qt 重建）。
+        """
+        settings = QSettings()
+        # 恢复主题
+        saved_theme = settings.value("theme", DEFAULT_THEME)
+        if saved_theme != DEFAULT_THEME and saved_theme in THEMES:
+            self._apply_theme(saved_theme)
+        # 恢复字体
+        saved_font = settings.value("font", None)
+        if saved_font is not None:
+            try:
+                self._font_manager.active_font = saved_font
+            except ValueError:
+                pass
+        # 恢复窗口几何
+        geometry = settings.value("geometry")
+        if geometry is not None:
+            self.restoreGeometry(geometry)
+        # 始终重新应用光标设置，因为 window.show() 后 viewport 被重建
+        self._apply_cursor_settings()
+
+    def _save_settings(self) -> None:
+        """保存当前设置到 QSettings。"""
+        settings = QSettings()
+        settings.setValue("theme", self._current_theme)
+        settings.setValue("font", self._font_manager.active_font)
+        settings.setValue("geometry", self.saveGeometry())
+
+    # ═══════════════════════════════════════════════════════
+    #  首次启动
+    # ═══════════════════════════════════════════════════════
+
+    def _check_first_launch(self) -> None:
+        """首次启动时弹出默认编辑器询问对话框，并注册文件关联。"""
+        from ..core.platform_integration import (
+            register_as_handler, is_default_handler, set_as_default_handler,
+        )
+
+        # 始终注册为「打开方式」选项（幂等）
+        register_as_handler()
+
+        settings = QSettings()
+        if settings.value("FirstLaunch/Seen", False, type=bool):
+            return  # 非首次启动
+
+        settings.setValue("FirstLaunch/Seen", True)
+
+        if is_default_handler():
+            return  # 已是默认程序，无需询问
+
+        self._show_default_app_dialog()
+
+    def _show_default_app_dialog(self) -> None:
+        """弹出「是否设为默认编辑器？」对话框。"""
+        from ..core.platform_integration import set_as_default_handler
+
+        reply = QMessageBox.question(
+            self,
+            "设为默认编辑器",
+            "是否将 MarkdownEditor 设为 .md 文件的默认打开程序？\n\n"
+            "您可以稍后在系统设置中更改此选项。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            ok = set_as_default_handler()
+            if not ok:
+                QMessageBox.information(
+                    self, "提示",
+                    "无法自动设置为默认程序。\n"
+                    "请右键点击 .md 文件 →「打开方式」→ 选择 MarkdownEditor。",
+                )
+
+    # ═══════════════════════════════════════════════════════
+    #  自动保存
+    # ═══════════════════════════════════════════════════════
+
+    def _autosave_tick(self) -> None:
+        """每 60 秒检查所有标签页，满足条件则静默保存。"""
+        for i in range(self._tab_widget.count()):
+            tab = self._tab_widget.widget(i)
+            if not isinstance(tab, Tab):
+                continue
+            if not tab.should_auto_save():
+                continue
+            try:
+                tab.file_manager.save_file(tab.editor_text, tab.current_path)
+                tab.mark_saved()
+                idx = self._tab_widget.indexOf(tab)
+                if idx >= 0:
+                    self._update_tab_title(idx, tab)
+                # 状态栏短暂提示
+                self._update_status(f"自动保存: {tab.filename}")
+            except (IOError, ValueError):
+                pass  # 静默忽略，不打断用户
+
+    # ═══════════════════════════════════════════════════════
+    #  启动时文件处理
+    # ═══════════════════════════════════════════════════════
+
+    def _process_pending_files(self) -> None:
+        """处理命令行传入的 .md 文件路径。"""
+        app = QApplication.instance()
+        if app is None:
+            return
+        pending = getattr(app, "pending_paths", [])
+        for path in pending:
+            self._on_drop_markdown_file(path)
+
+        # 连接运行中收到文件的信号
+        manager = getattr(app, "_single_instance_manager", None)
+        if manager is not None and hasattr(manager, "file_received"):
+            manager.file_received.connect(self._on_drop_markdown_file)
+
+        # 连接 macOS QFileOpenEvent 信号
+        if hasattr(app, "file_open_requested"):
+            app.file_open_requested.connect(self._on_drop_markdown_file)
+
+    # ═══════════════════════════════════════════════════════
+    #  窗口关闭
+    # ═══════════════════════════════════════════════════════
+
     def closeEvent(self, event) -> None:
         """关闭窗口前检查所有标签页未保存内容，并停止后台线程。"""
         for i in range(self._tab_widget.count()):
@@ -832,6 +1077,8 @@ class MainWindow(QMainWindow):
                 if not self._maybe_save_tab(tab):
                     event.ignore()
                     return
+        self._save_settings()
+        self._autosave_timer.stop()
         event.accept()
         self._preview_thread.quit()
         self._preview_thread.wait()

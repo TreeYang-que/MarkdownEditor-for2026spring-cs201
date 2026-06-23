@@ -7,7 +7,7 @@ from pathlib import Path
 from urllib.parse import urlparse, unquote
 
 from PyQt6.QtCore import Qt, pyqtSignal, QRect, QSize, QUrl
-from PyQt6.QtGui import QColor, QFont, QFontDatabase, QFontInfo, QPainter, QTextCursor, QTextFormat
+from PyQt6.QtGui import QColor, QFont, QFontDatabase, QFontInfo, QPainter, QPalette, QTextCursor, QTextFormat
 from PyQt6.QtWidgets import QPlainTextEdit, QTextEdit, QWidget
 
 # 跨平台等宽字体优先级列表
@@ -84,6 +84,10 @@ class EditorWidget(QPlainTextEdit):
             self.fontMetrics().horizontalAdvance(" ") * self.TAB_SPACES
         )
 
+        # 光标初始化（默认亮色主题值）
+        self._caret_color: str = "#222222"
+        self.setCursorWidth(2)
+
         # 行号区域
         self._line_number_area = _LineNumberArea(self)
         self._line_number_bg: str = "#f0f0f0"
@@ -109,6 +113,30 @@ class EditorWidget(QPlainTextEdit):
         self._line_number_fg = fg
         self._line_number_area.update()
 
+    def set_caret_color(self, color: str) -> None:
+        """设置光标颜色并存储，供 viewport 重建后恢复。"""
+        self._caret_color = color
+        self._apply_caret_color()
+
+    def _apply_caret_color(self) -> None:
+        """在 widget 和 viewport 两层设置 Text 颜色，确保光标可见。
+
+        同时设置 widget palette 和 viewport palette。
+        每次 setViewportMargins / setPlainText 可能触发 viewport 重建，
+        调用此方法可恢复。
+        """
+        color = QColor(self._caret_color)
+        # widget 层
+        p = self.palette()
+        p.setColor(QPalette.ColorRole.Text, color)
+        self.setPalette(p)
+        # viewport 层
+        vp = self.viewport()
+        if vp is not None:
+            p2 = vp.palette()
+            p2.setColor(QPalette.ColorRole.Text, color)
+            vp.setPalette(p2)
+
     # ── 行号区域 ──────────────────────────────────────
 
     def _line_number_area_width(self) -> int:
@@ -118,8 +146,9 @@ class EditorWidget(QPlainTextEdit):
         return 10 + self.fontMetrics().horizontalAdvance("9") * digits + 10
 
     def _update_line_number_area_width(self, _new_block_count: int) -> None:
-        """行数变化时调整边距。"""
+        """行数变化时调整边距。setViewportMargins 可能重建 viewport，恢复光标。"""
         self.setViewportMargins(self._line_number_area_width(), 0, 0, 0)
+        self._apply_caret_color()
 
     def _update_line_number_area(self, rect: QRect, dy: int) -> None:
         """滚动/更新时重绘行号区域。"""
