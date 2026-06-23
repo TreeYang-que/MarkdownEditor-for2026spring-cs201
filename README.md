@@ -68,15 +68,6 @@ MarkdownEditor/
     └── test_markdown_engine.py
 ```
 
-## 小组分工建议
-
-| 模块 | 说明 | 建议人数 |
-|------|------|---------|
-| 编辑器组件 | `editor_widget.py` — 源码编辑、行号、快捷键 | 1 人 |
-| 预览组件 | `preview_widget.py` — HTML 渲染、实时更新 | 1 人 |
-| 主窗口 & 工具栏 | `main_window.py` + `toolbar.py` — 菜单栏、工具栏、布局 | 1 人 |
-| 核心引擎 | `markdown_engine.py` + `file_manager.py` — 解析、文件操作、导出 | 1 人 |
-| 主题 & 测试 | `style.py` + 测试用例 + 整体调试 | 1 人 |
 
 ## 技术栈
 
