@@ -45,9 +45,87 @@ RECOMMENDED_FONTS: dict[str, FontEntry] = {
             "SourceHanSerifCN-Regular.otf",
             "SourceHanSerifCN-Bold.otf",
         ],
-        description="思源宋体 — Adobe 开源宋体，7 种字重，适合正文排版",
+        description="思源宋体 — Adobe/Google 开源宋体，适合正文排版",
+    ),
+    "source-han-sans": FontEntry(
+        key="source-han-sans",
+        family_name="Source Han Sans SC",
+        css_fallback='"Source Han Sans SC", "Noto Sans CJK SC", '
+                     '"微软雅黑", "PingFang SC", sans-serif',
+        category="sans-serif",
+        download_url=(
+            "https://github.com/adobe-fonts/source-han-sans/releases/"
+            "download/2.004R/09_SourceHanSansSC.zip"
+        ),
+        files=[
+            "SourceHanSansSC-Regular.otf",
+            "SourceHanSansSC-Bold.otf",
+        ],
+        description="思源黑体 — Adobe/Google 开源黑体，适合标题和 UI",
+    ),
+    "lxgw-wenkai": FontEntry(
+        key="lxgw-wenkai",
+        family_name="LXGW WenKai",
+        css_fallback='"LXGW WenKai", "霞鹜文楷", '
+                     '"楷体", "华文楷体", "KaiTi", cursive',
+        category="serif",
+        download_url=(
+            "https://github.com/lxgw/LxgwWenKai/releases/"
+            "download/v1.330/LXGWWenKai-Regular.ttf"
+        ),
+        files=["LXGWWenKai-Regular.ttf"],
+        description="霞鹜文楷 — 开源楷体风格，字形优美，适合正文和引用",
+    ),
+    "lxgw-wenkai-mono": FontEntry(
+        key="lxgw-wenkai-mono",
+        family_name="LXGW WenKai Mono",
+        css_fallback='"LXGW WenKai Mono", "霞鹜文楷等宽", '
+                     '"Consolas", "Courier New", monospace',
+        category="mono",
+        download_url=(
+            "https://github.com/lxgw/LxgwWenKai/releases/"
+            "download/v1.330/LXGWWenKaiMono-Regular.ttf"
+        ),
+        files=["LXGWWenKaiMono-Regular.ttf"],
+        description="霞鹜文楷等宽 — 代码友好的楷体等宽字体",
     ),
 }
+
+
+# ═══════════════════════════════════════════════════════════════
+#  下载辅助函数
+# ═══════════════════════════════════════════════════════════════
+
+def _dl_zip(entry, dest: Path, on_progress, on_error, key: str) -> None:
+    """下载 zip 并解压提取指定文件。"""
+    zip_path = dest / f"{key}.zip"
+    try:
+        def _progress(count, block_size, total):
+            if total > 0 and on_progress:
+                on_progress(min(int(count * block_size / total * 100), 100))
+
+        urlretrieve(entry.download_url, str(zip_path), _progress)
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            for name in entry.files:
+                zf.extract(name, str(dest))
+    finally:
+        try:
+            zip_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _dl_single(entry, dest: Path, on_progress, on_error, key: str) -> None:
+    """下载单个 .ttf/.otf 文件直接保存。"""
+    # entry.files 中的第一个文件名作为保存名
+    filename = entry.files[0] if entry.files else Path(entry.download_url).name
+    dest_path = dest / filename
+
+    def _progress(count, block_size, total):
+        if total > 0 and on_progress:
+            on_progress(min(int(count * block_size / total * 100), 100))
+
+    urlretrieve(entry.download_url, str(dest_path), _progress)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -137,11 +215,11 @@ class FontManager:
         on_done: callable = None,
         on_error: callable = None,
     ) -> None:
-        """后台线程下载字体 zip，解压提取指定文件。
+        """后台线程下载字体。自动识别 zip 包或单个 .ttf/.otf 文件。
 
         Args:
             key: 字体 key。
-            on_progress(percent: int): 进度回调（主线程安全需自行处理）。
+            on_progress(percent: int): 进度回调。
             on_done(key: str): 下载完成回调。
             on_error(key: str, error: str): 出错回调。
         """
@@ -151,37 +229,19 @@ class FontManager:
                 on_error(key, f"未知字体: {key}")
             return
 
+        is_zip = entry.download_url.lower().endswith(".zip")
+
         def _run() -> None:
-            zip_path = self._fonts_dir / f"{key}.zip"
             try:
-                # 下载
-                def _progress(count: int, block_size: int, total: int) -> None:
-                    if total > 0 and on_progress:
-                        pct = min(int(count * block_size / total * 100), 100)
-                        on_progress(pct)
-
-                urlretrieve(entry.download_url, str(zip_path), _progress)
-
-                # 解压指定文件
-                with zipfile.ZipFile(zip_path, "r") as zf:
-                    for name in entry.files:
-                        zf.extract(name, str(self._fonts_dir))
-
-                # 清理 zip
-                try:
-                    zip_path.unlink()
-                except OSError:
-                    pass
+                if is_zip:
+                    _dl_zip(entry, self._fonts_dir, on_progress, on_error, key)
+                else:
+                    _dl_single(entry, self._fonts_dir, on_progress, on_error, key)
 
                 if on_done:
                     on_done(key)
-
             except Exception as e:
                 logger.exception("下载字体失败: %s", key)
-                try:
-                    zip_path.unlink(missing_ok=True)
-                except OSError:
-                    pass
                 if on_error:
                     on_error(key, str(e))
 

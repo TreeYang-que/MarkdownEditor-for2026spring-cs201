@@ -165,8 +165,8 @@ class MainWindow(QMainWindow):
             )
             view_menu.addAction(action)
 
-        view_menu.addSeparator()
-        self._setup_font_menu(view_menu)
+        # ── 字体菜单 ──
+        self._setup_font_menu(menubar)
 
         # ── 帮助菜单 ──
         help_menu = menubar.addMenu("帮助(&H)")
@@ -348,9 +348,9 @@ class MainWindow(QMainWindow):
                 )
         return "\n".join(parts)
 
-    def _setup_font_menu(self, view_menu) -> None:
-        """初始化视图 → 字体子菜单。"""
-        font_menu = view_menu.addMenu("字体(&F)")
+    def _setup_font_menu(self, menubar) -> None:
+        """初始化顶层「字体」菜单（与文件/编辑/视图同级）。"""
+        font_menu = menubar.addMenu("字体(&F)")
         self._populate_font_menu_actions(font_menu)
 
     def _populate_font_menu_actions(self, font_menu) -> None:
@@ -412,10 +412,9 @@ class MainWindow(QMainWindow):
         self._font_manager.download_font(key, on_done=on_done, on_error=on_error)
 
     def _rebuild_font_menu(self) -> None:
-        """重建字体子菜单以反映最新状态（下载完成后调用）。"""
-        view_menu = self.menuBar().actions()[2]
-        font_menu_action = view_menu.menu().actions()[-1]
-        font_menu = font_menu_action.menu()
+        """重建字体菜单（下载完成后调用）。"""
+        # 菜单栏顺序: 文件(0), 编辑(1), 视图(2), 字体(3)
+        font_menu = self.menuBar().actions()[3].menu()
         font_menu.clear()
         self._populate_font_menu_actions(font_menu)
 
