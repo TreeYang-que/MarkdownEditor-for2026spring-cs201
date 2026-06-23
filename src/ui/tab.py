@@ -126,6 +126,9 @@ class Tab(QWidget):
         """设置编辑器内容并重置修改标记（用于加载文件）。"""
         was_modified = self._file_manager.modified
         self._editor.setPlainText(text)
+        # setPlainText 可能触发 viewport palette 重置，确保光标颜色恢复。
+        # EditorWidget.setPlainText 重写已做同步+异步恢复，此处再调一次作为保险。
+        self._editor._apply_caret_color()
         if not was_modified:
             self._file_manager._modified = False
 

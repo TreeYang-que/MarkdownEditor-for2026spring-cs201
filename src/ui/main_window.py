@@ -391,6 +391,36 @@ class MainWindow(QMainWindow):
         if self._tab_widget.count() == 0:
             self._on_new()
 
+    def _close_empty_tab(self, tab: Tab) -> None:
+        """静默关闭空白未修改标签页（不提示保存）。
+
+        用于拖入 .md 文件后清理被 dropEvent 污染的空白标签页。
+        必须延迟调用（QTimer.singleShot(0)），确保 Qt 的 drop
+        事件后处理已经完成后再移除该 widget。"""
+        if tab is None:
+            return
+        idx = self._tab_widget.indexOf(tab)
+        if idx < 0:
+            return
+        if tab.modified:
+            return  # 内容已被修改，不关闭
+        # 断开信号
+        try:
+            tab.text_changed.disconnect(self._on_text_changed)
+        except TypeError:
+            pass
+        try:
+            tab.markdown_file_dropped.disconnect(self._on_drop_markdown_file)
+        except TypeError:
+            pass
+        try:
+            tab.editor.cursorPositionChanged.disconnect(self._on_cursor_changed)
+        except TypeError:
+            pass
+        self._tab_widget.removeTab(idx)
+        if self._tab_widget.count() == 0:
+            self._on_new()
+
     def _update_tab_title(self, index: int, tab: Tab) -> None:
         """更新单个标签页的标题（modified 时加 * 前缀）。"""
         prefix = "* " if tab.modified else ""
@@ -436,15 +466,23 @@ class MainWindow(QMainWindow):
             self._update_tab_title(self._tab_widget.currentIndex(), new_tab)
 
     def _on_drop_markdown_file(self, path: str) -> None:
-        """拖入 Markdown 文件 → 打开。"""
-        tab = self._active_tab
-        if tab is not None and self._is_tab_empty(tab):
-            self._open_file_in_tab(path, tab)
-        else:
-            new_tab = Tab()
-            self._open_file_in_tab(path, new_tab, switch=False)
-            self._add_tab(new_tab, Path(path).name)
-            self._update_tab_title(self._tab_widget.currentIndex(), new_tab)
+        """拖入 Markdown 文件 → 打开。
+
+        不复用当前空标签页 —— dropEvent 上下文会让 Qt 基于 drop
+        鼠标坐标后处理光标位置，导致视觉光标与实际位置分离。
+        改为在新标签页打开，随后清理被 drop 的空白标签页。"""
+        empty_tab = self._active_tab
+        reuse_empty = empty_tab is not None and self._is_tab_empty(empty_tab)
+
+        new_tab = Tab()
+        self._open_file_in_tab(path, new_tab, switch=False)
+        self._add_tab(new_tab, Path(path).name)
+        self._update_tab_title(self._tab_widget.currentIndex(), new_tab)
+
+        if reuse_empty and self._is_tab_empty(empty_tab):
+            # 延迟清理：等 dropEvent 完全退出后再移除空标签页，
+            # 避免在 Qt 事件处理中途删除触发 drop 的 widget。
+            QTimer.singleShot(0, lambda et=empty_tab: self._close_empty_tab(et))
 
     def _open_file_in_tab(self, path: str, tab: Tab, switch: bool = True) -> None:
         """在指定标签页中打开文件。"""

@@ -6,7 +6,7 @@ Markdown 源码编辑器 —— 带行号的 QPlainTextEdit 子类。
 from pathlib import Path
 from urllib.parse import urlparse, unquote
 
-from PyQt6.QtCore import Qt, pyqtSignal, QRect, QSize, QUrl
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QRect, QSize, QUrl
 from PyQt6.QtGui import QColor, QFont, QFontDatabase, QFontInfo, QPainter, QPalette, QTextCursor, QTextFormat
 from PyQt6.QtWidgets import QPlainTextEdit, QTextEdit, QWidget
 
@@ -137,6 +137,17 @@ class EditorWidget(QPlainTextEdit):
             p2.setColor(QPalette.ColorRole.Text, color)
             vp.setPalette(p2)
 
+    # ── 文本操作 ────────────────────────────────────────
+
+    def setPlainText(self, text: str) -> None:
+        """重写以在 viewport 重建后恢复光标颜色。
+
+        Qt 的 setPlainText() 可能在内部重置 viewport palette。
+        立即恢复覆盖同步情况，QTimer.singleShot(0, ...) 兜底异步重置。"""
+        super().setPlainText(text)
+        self._apply_caret_color()
+        QTimer.singleShot(0, self._apply_caret_color)
+
     # ── 行号区域 ──────────────────────────────────────
 
     def _line_number_area_width(self) -> int:
@@ -146,9 +157,9 @@ class EditorWidget(QPlainTextEdit):
         return 10 + self.fontMetrics().horizontalAdvance("9") * digits + 10
 
     def _update_line_number_area_width(self, _new_block_count: int) -> None:
-        """行数变化时调整边距。setViewportMargins 可能重建 viewport，恢复光标。"""
+        """行数变化时调整边距。QTimer 延迟恢复以确保在 Qt 内部重置之后执行。"""
         self.setViewportMargins(self._line_number_area_width(), 0, 0, 0)
-        self._apply_caret_color()
+        QTimer.singleShot(0, self._apply_caret_color)
 
     def _update_line_number_area(self, rect: QRect, dy: int) -> None:
         """滚动/更新时重绘行号区域。"""
@@ -297,8 +308,10 @@ class EditorWidget(QPlainTextEdit):
                     ext = Path(local_paths[0]).suffix.lower()
                     if ext in self.MARKDOWN_EXTENSIONS:
                         self.markdown_file_dropped.emit(local_paths[0])
+                        event.acceptProposedAction()
                         return
                 self._insert_file_links(local_paths)
+                event.acceptProposedAction()
                 return
         super().dropEvent(event)
 
