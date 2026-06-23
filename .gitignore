@@ -30,3 +30,6 @@ Desktop.ini
 *.log
 output/
 CLAUDE.md
+src/resources/fonts/*.otf
+src/resources/fonts/*.ttf
+src/resources/fonts/*.zip

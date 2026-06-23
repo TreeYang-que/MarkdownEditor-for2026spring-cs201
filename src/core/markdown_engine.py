@@ -436,6 +436,7 @@ class MarkdownEngine:
         title: str = "预览",
         preview_mode: bool = False,
         theme: str | None = None,
+        font_face_css: str = "",
     ) -> str:
         """将 HTML body 包装为完整的 HTML 文档。
 
@@ -444,6 +445,7 @@ class MarkdownEngine:
             title: 页面标题。
             preview_mode: 是否用于预览面板（True 时注入公式/主题高亮 CSS）。
             theme: 主题名称 ("default" / "latex")，为 None 时使用引擎当前主题。
+            font_face_css: 额外的 @font-face CSS（字体管理器提供）。
 
         Returns:
             完整的 HTML 文档字符串。
@@ -451,13 +453,14 @@ class MarkdownEngine:
         theme_name = theme or self._theme
 
         if theme_name == "latex":
-            return self._wrap_latex(html_body, title, preview_mode)
-        return self._wrap_default(html_body, title, preview_mode)
+            return self._wrap_latex(html_body, title, preview_mode, font_face_css)
+        return self._wrap_default(html_body, title, preview_mode, font_face_css)
 
     # ── 默认主题包装 ──────────────────────────────────
 
     def _wrap_default(
-        self, html_body: str, title: str, preview_mode: bool
+        self, html_body: str, title: str, preview_mode: bool,
+        font_face_css: str = "",
     ) -> str:
         math_css = (
             _MATH_PREVIEW_LIGHT_CSS + _MATH_PREVIEW_DARK_CSS
@@ -479,6 +482,7 @@ MathJax = {{
 </script>
 <style>
 {self._code_css}
+{font_face_css}
 {_DEFAULT_PREVIEW_LIGHT_CSS}
 {math_css}
 {_DEFAULT_PREVIEW_DARK_CSS}
@@ -492,7 +496,8 @@ MathJax = {{
     # ── LaTeX 主题包装 ────────────────────────────────
 
     def _wrap_latex(
-        self, html_body: str, title: str, preview_mode: bool
+        self, html_body: str, title: str, preview_mode: bool,
+        font_face_css: str = "",
     ) -> str:
         if preview_mode:
             body_css = _LATEX_PREVIEW_LIGHT_CSS
@@ -519,6 +524,7 @@ MathJax = {{
 </script>
 <style>
 {self._code_css}
+{font_face_css}
 {body_css}
 {math_css}
 {dark_css}

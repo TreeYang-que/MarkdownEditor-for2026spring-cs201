@@ -11,12 +11,18 @@ from PyQt6.QtWidgets import (
     QFileDialog,
     QMainWindow,
     QMessageBox,
+    QProgressDialog,
     QSplitter,
     QStatusBar,
     QWidget,
 )
 
 from ..core.file_manager import FileManager
+from ..core.font_manager import (
+    FontManager,
+    RECOMMENDED_FONTS,
+    _FontDownloadWorker,
+)
 from ..core.markdown_engine import MarkdownEngine
 from ..themes.style import DEFAULT_THEME, THEMES, Theme
 from .editor_widget import EditorWidget
@@ -27,32 +33,28 @@ from .toolbar import MarkdownToolbar
 class _PreviewWorker(QObject):
     """后台线程：执行 Markdown → HTML 转换，释放主线程 UI。"""
 
-    # — 内部信号：跨线程触发实际转换逻辑 —
-    _do_convert = pyqtSignal(str, int)
-    # — 结果信号：转换完成后回传主线程 —
+    _do_convert = pyqtSignal(str, int, str)       # text, request_id, font_css
     finished = pyqtSignal(str, int)
 
     def __init__(self, engine: MarkdownEngine):
         super().__init__()
         self._engine = engine
-        # 连接到工作线程内部的槽（该连接在工作线程中执行，因此是直接连接）
         self._do_convert.connect(self._on_convert)
 
-    def _on_convert(self, text: str, request_id: int) -> None:
-        """在后台线程中执行转换（由 _do_convert 信号触发）。"""
+    def _on_convert(self, text: str, request_id: int, font_css: str) -> None:
         if not text.strip():
             self.finished.emit("", request_id)
             return
         try:
             body = self._engine.convert(text)
-            html = self._engine.wrap_html(body, preview_mode=True)
+            html = self._engine.wrap_html(body, preview_mode=True,
+                                          font_face_css=font_css)
             self.finished.emit(html, request_id)
         except Exception:
             self.finished.emit("", request_id)
 
-    def request(self, text: str, request_id: int) -> None:
-        """主线程调用：发起一次异步转换请求。"""
-        self._do_convert.emit(text, request_id)
+    def request(self, text: str, request_id: int, font_css: str = "") -> None:
+        self._do_convert.emit(text, request_id, font_css)
 
 
 class MainWindow(QMainWindow):
@@ -69,6 +71,13 @@ class MainWindow(QMainWindow):
         # ── 核心模块 ──────────────────────────────────
         self._engine = MarkdownEngine()
         self._file_manager = FileManager()
+
+        # 字体管理器
+        fonts_dir = Path(__file__).resolve().parent.parent / "resources" / "fonts"
+        self._font_manager = FontManager(fonts_dir)
+        loaded = self._font_manager.load_local_fonts()
+        if loaded > 0:
+            print(f"[FontManager] 已加载 {loaded} 个本地字体文件")
 
         # ── UI 组件 ───────────────────────────────────
         self._editor = EditorWidget()
@@ -199,6 +208,9 @@ class MainWindow(QMainWindow):
             )
             view_menu.addAction(action)
 
+        # ── 字体菜单 ──
+        self._setup_font_menu(menubar)
+
         # ── 帮助菜单 ──
         help_menu = menubar.addMenu("帮助(&H)")
 
@@ -326,9 +338,11 @@ class MainWindow(QMainWindow):
             return
 
         try:
+            font_css = self._get_font_face_css(preview_mode=False)
             html = self._engine.wrap_html(
                 self._engine.convert(self._editor.toPlainText()),
                 title=Path(path).stem,
+                font_face_css=font_css,
             )
             exported = self._file_manager.export_html(html, path)
             self._update_status(f"已导出: {exported}")
@@ -350,12 +364,13 @@ class MainWindow(QMainWindow):
             return
 
         self._preview_request_id += 1
-        self._preview_worker.request(text, self._preview_request_id)
+        font_css = self._get_font_face_css(preview_mode=True)
+        self._preview_worker.request(text, self._preview_request_id, font_css)
 
     def _on_preview_ready(self, html: str, request_id: int) -> None:
         """后台转换完成，回主线程更新预览（丢弃过期结果）。"""
         if request_id != self._preview_request_id:
-            return  # 用户继续编辑产生了更新的请求，丢弃此结果
+            return
         if not html:
             return
         self._preview.show_preview(html)
@@ -379,6 +394,149 @@ class MainWindow(QMainWindow):
             )
         self._editor.setTextCursor(cursor)
         self._editor.setFocus()
+
+    # ── 字体管理 ──────────────────────────────────────
+
+    def _get_font_face_css(self, preview_mode: bool) -> str:
+        """收集所有可用字体的 @font-face CSS，以及当前激活字体的覆盖规则。"""
+        parts = []
+        for key, entry in RECOMMENDED_FONTS.items():
+            if not self._font_manager.is_usable(key):
+                continue
+            if preview_mode:
+                css = self._font_manager.get_preview_font_face_css(key)
+            else:
+                css = self._font_manager.get_font_face_css(key)
+            if css:
+                parts.append(css)
+        # 如果选中了某字体，追加一条 body font-family 覆盖
+        if self._font_manager.active_font:
+            entry = RECOMMENDED_FONTS.get(self._font_manager.active_font)
+            if entry and self._font_manager.is_usable(entry.key):
+                parts.append(
+                    f'body {{ font-family: {entry.css_fallback} !important; }}'
+                )
+        return "\n".join(parts)
+
+    def _setup_font_menu(self, menubar) -> None:
+        """初始化顶层「字体」菜单（与文件/编辑/视图同级）。"""
+        font_menu = menubar.addMenu("字体(&F)")
+        self._populate_font_menu_actions(font_menu)
+
+    def _populate_font_menu_actions(self, font_menu) -> None:
+        """填充字体子菜单项（可重复调用以刷新）。"""
+        default_action = QAction("系统默认", self)
+        default_action.setCheckable(True)
+        default_action.setChecked(self._font_manager.active_font is None)
+        default_action.triggered.connect(
+            lambda: self._on_font_select(None)
+        )
+        font_menu.addAction(default_action)
+        font_menu.addSeparator()
+
+        for key, entry in RECOMMENDED_FONTS.items():
+            available = self._font_manager.is_usable(key)
+            action = QAction(entry.description, self)
+            action.setCheckable(True)
+            action.setChecked(self._font_manager.active_font == key)
+            action.setEnabled(available)
+            action.triggered.connect(
+                lambda checked, k=key: self._on_font_select(k)
+            )
+            font_menu.addAction(action)
+
+            if not available:
+                dl_action = QAction(f"  ⬇ 下载 {entry.family_name}", self)
+                dl_action.triggered.connect(
+                    lambda checked, k=key: self._on_download_font(k)
+                )
+                font_menu.addAction(dl_action)
+
+    def _on_font_select(self, key: str | None) -> None:
+        """选择当前字体并刷新预览。"""
+        self._font_manager.active_font = key
+        self._rebuild_font_menu()
+        self._update_preview()
+        name = RECOMMENDED_FONTS[key].family_name if key else "系统默认"
+        self._update_status(f"字体: {name}")
+
+    def _on_download_font(self, key: str) -> None:
+        """在后台线程下载字体，显示进度对话框。"""
+        entry = RECOMMENDED_FONTS.get(key)
+        if entry is None:
+            return
+
+        # ── 进度对话框 ──
+        progress_dlg = QProgressDialog(
+            f"正在下载 {entry.family_name} …", "取消", 0, 100, self,
+        )
+        progress_dlg.setWindowTitle("字体下载")
+        progress_dlg.setWindowModality(Qt.WindowModality.WindowModal)
+        progress_dlg.setMinimumDuration(0)  # 立即显示
+        progress_dlg.setValue(0)
+
+        # ── 工作线程 ──
+        thread = QThread(self)
+        worker = _FontDownloadWorker(self._font_manager, key)
+        worker.moveToThread(thread)
+
+        # 信号连接
+        worker.progress.connect(progress_dlg.setValue)
+
+        worker.finished.connect(
+            lambda k: self._on_download_done(k, progress_dlg, thread, worker)
+        )
+        worker.error.connect(
+            lambda k, err: self._on_download_error(k, err, entry,
+                                                    progress_dlg, thread, worker)
+        )
+
+        # 取消按钮：终止线程
+        progress_dlg.canceled.connect(thread.quit)
+
+        # 线程结束后清理
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(worker.deleteLater)
+
+        thread.started.connect(worker.run)
+        thread.start()
+
+    def _on_download_done(
+        self, key: str, dlg: QProgressDialog, thread: QThread,
+        worker: _FontDownloadWorker,
+    ) -> None:
+        """下载完成（主线程回调）。"""
+        dlg.setValue(100)
+        dlg.close()
+        thread.quit()
+        thread.wait()
+        self._font_manager.load_local_fonts()
+        entry = RECOMMENDED_FONTS.get(key)
+        name = entry.family_name if entry else key
+        self._update_status(f"字体 {name} 下载完成")
+        self._rebuild_font_menu()
+        self._update_preview()
+        QMessageBox.information(self, "下载完成",
+                                f"字体「{name}」已下载并安装。")
+
+    def _on_download_error(
+        self, key: str, error: str, entry, dlg: QProgressDialog,
+        thread: QThread, worker: _FontDownloadWorker,
+    ) -> None:
+        """下载出错（主线程回调）。"""
+        dlg.close()
+        thread.quit()
+        thread.wait()
+        self._update_status(f"下载失败: {error}")
+        QMessageBox.warning(self, "下载失败",
+                            f"字体 {entry.family_name} 下载失败:\n{error}")
+
+    def _rebuild_font_menu(self) -> None:
+        """重建字体菜单（下载完成后调用）。"""
+        # 菜单栏顺序: 文件(0), 编辑(1), 视图(2), 字体(3)
+        font_menu = self.menuBar().actions()[3].menu()
+        font_menu.clear()
+        self._populate_font_menu_actions(font_menu)
 
     # ── 主题切换 ──────────────────────────────────────
 
