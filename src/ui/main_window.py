@@ -284,7 +284,7 @@ class MainWindow(QMainWindow):
 
         try:
             body = self._engine.convert(text)
-            html = self._engine.wrap_html(body)
+            html = self._engine.wrap_html(body, preview_mode=True)
             self._preview.show_preview(html)
         except Exception:
             # 解析错误时静默忽略，保持上次预览内容

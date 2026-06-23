@@ -94,6 +94,37 @@ class TestMarkdownEngine:
         assert "<p>Hello</p>" in full
         assert "</html>" in full
 
+    # ── LaTeX 数学公式 ──────────────────────────────
+
+    def test_inline_math(self):
+        html = self.engine.convert("质能方程 $E=mc^2$ 很著名")
+        assert "arithmatex" in html
+        assert "E=mc^2" in html
+
+    def test_block_math(self):
+        html = self.engine.convert("$$\n\\int_0^\\infty e^{-x} dx = 1\n$$")
+        assert "arithmatex" in html
+        assert "\\int" in html
+
+    def test_math_with_underscore(self):
+        html = self.engine.convert("$x_1 + x_2 = y$")
+        assert "arithmatex" in html
+        assert "x_1" in html
+
+    def test_wrap_html_includes_mathjax(self):
+        full = self.engine.wrap_html("<p>test</p>")
+        assert "mathjax" in full.lower()
+
+    def test_wrap_html_preview_mode_has_math_css(self):
+        """预览模式应包含公式高亮 CSS。"""
+        full = self.engine.wrap_html("<p>test</p>", preview_mode=True)
+        assert "arithmatex" in full
+
+    def test_wrap_html_export_mode_no_math_css(self):
+        """导出模式不应包含公式高亮 CSS。"""
+        full = self.engine.wrap_html("<p>test</p>", preview_mode=False)
+        assert "arithmatex" not in full
+
 
 def run_tests():
     """简单的测试运行器（不依赖 pytest）。"""
