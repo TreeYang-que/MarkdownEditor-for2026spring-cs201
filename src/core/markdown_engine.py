@@ -1,10 +1,57 @@
 """
 Markdown 渲染引擎 —— 将 Markdown 源码转换为 HTML。
-支持扩展语法（表格、代码高亮、脚注等）。
+支持扩展语法（表格、代码高亮、脚注、LaTeX 公式等）。
 """
 
 from markdown import Markdown
 from markdown.extensions import Extension
+
+
+# ── 预览专用公式高亮 CSS ────────────────────────────────
+# QTextBrowser 不支持 JavaScript，MathJax 无法在预览中运行，
+# 所以通过 CSS 给公式区域加视觉标记方便编辑时识别。
+# 导出 HTML 时不注入此样式 — 浏览器端 MathJax 直接渲染。
+
+_MATH_PREVIEW_LIGHT_CSS = """
+/* ── 数学公式高亮标记（仅预览） ── */
+.arithmatex {
+    display: inline-block;
+    background: #f3e8ff;
+    border: 1px dashed #c4a2e8;
+    border-radius: 4px;
+    padding: 1px 6px;
+    font-family: "Consolas", "Courier New", monospace;
+    font-size: 0.92em;
+    color: #6b21a8;
+    margin: 0 1px;
+}
+
+div.arithmatex {
+    display: block;
+    background: #f5f0ff;
+    border: 1px solid #d4c0f0;
+    border-radius: 6px;
+    padding: 12px 16px;
+    margin: 1em 0;
+    overflow-x: auto;
+    text-align: center;
+    font-size: 1.05em;
+}
+"""
+
+_MATH_PREVIEW_DARK_CSS = """
+/* 暗色主题 — 数学公式高亮 */
+body.dark .arithmatex {
+    background: #2d2040;
+    border-color: #6b3fa0;
+    color: #c4a2e8;
+}
+
+body.dark div.arithmatex {
+    background: #252030;
+    border-color: #5a3a8a;
+}
+"""
 
 
 class MarkdownEngine:
@@ -24,6 +71,7 @@ class MarkdownEngine:
             "nl2br",                # 换行转 <br>
             "sane_lists",           # 更合理的列表解析
             "footnotes",            # 脚注
+            "pymdownx.arithmatex",  # LaTeX 数学公式
         ]
 
         extension_configs = {
@@ -31,6 +79,9 @@ class MarkdownEngine:
                 "css_class": "highlight",
                 "guess_lang": True,
                 "use_pygments": True,
+            },
+            "pymdownx.arithmatex": {
+                "generic": True,    # 输出通用格式，由 MathJax/KaTeX 渲染
             },
         }
 
@@ -52,13 +103,15 @@ class MarkdownEngine:
         self._md.reset()
         return self._md.convert(markdown_text)
 
-    def wrap_html(self, html_body: str, title: str = "预览") -> str:
-        """将 HTML body 包装为完整的 HTML 文档，
-        嵌入 Pygments 代码高亮 CSS 和预览样式。
+    def wrap_html(
+        self, html_body: str, title: str = "预览", preview_mode: bool = False
+    ) -> str:
+        """将 HTML body 包装为完整的 HTML 文档。
 
         Args:
             html_body: Markdown 转换得到的 HTML body 内容。
             title: 页面标题。
+            preview_mode: 是否用于预览面板（True 时注入公式高亮 CSS）。
 
         Returns:
             完整的 HTML 文档字符串。
@@ -69,12 +122,28 @@ class MarkdownEngine:
         except ImportError:
             code_css = ""
 
+        # 仅预览模式下注入公式标记 CSS；导出 HTML 由浏览器端 MathJax 渲染
+        math_css = (
+            _MATH_PREVIEW_LIGHT_CSS + _MATH_PREVIEW_DARK_CSS
+            if preview_mode
+            else ""
+        )
+
         return f"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>{title}</title>
+<!-- MathJax 3: 浏览器打开后自动渲染 LaTeX 公式 -->
+<script>
+MathJax = {{
+  tex: {{ inlineMath: [['$','$'], ['\\\\(','\\\\)']] }},
+  options: {{ enableMenu: false }}
+}};
+</script>
+<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js" async>
+</script>
 <style>
 {code_css}
 
@@ -87,7 +156,7 @@ body {{
     margin: 0 auto;
     padding: 20px;
 }}
-
+{math_css}
 h1, h2, h3, h4, h5, h6 {{
     color: #222;
     margin-top: 1.2em;

@@ -34,6 +34,9 @@ class MarkdownToolbar(QToolBar):
         None,
         {"text": "引用", "before": "> ",      "after": "",   "tip": "引用"},
         {"text": "分隔线", "before": "\n---\n", "after": "",  "tip": "水平分隔线"},
+        None,
+        {"text": "行内公式", "before": "$",    "after": "$",      "tip": "行内 LaTeX 公式"},
+        {"text": "块级公式", "before": "\n$$\n", "after": "\n$$\n", "tip": "块级 LaTeX 公式"},
     ]
 
     def __init__(self, parent=None):
