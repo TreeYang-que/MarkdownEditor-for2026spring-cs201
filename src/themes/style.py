@@ -9,8 +9,9 @@ from dataclasses import dataclass
 class Theme:
     """一个主题的 QSS 样式定义。"""
     name: str
-    qss: str           # Qt 组件样式
-    preview_css: str   # 预览面板 HTML 背景色注入
+    qss: str                # Qt 组件样式
+    preview_css: str        # 预览面板 HTML 背景色注入
+    engine_theme: str = "default"  # 渲染引擎主题 ("default" / "latex")
 
 
 # ── 亮色主题 ──────────────────────────────────────────
@@ -325,8 +326,22 @@ body.dark {
 # ── 主题注册表 ────────────────────────────────────────
 
 THEMES: dict[str, Theme] = {
-    "亮色": Theme(name="亮色", qss=LIGHT_QSS, preview_css=LIGHT_PREVIEW_CSS),
-    "暗色": Theme(name="暗色", qss=DARK_QSS, preview_css=DARK_PREVIEW_CSS),
+    "亮色": Theme(
+        name="亮色", qss=LIGHT_QSS, preview_css=LIGHT_PREVIEW_CSS,
+        engine_theme="default",
+    ),
+    "暗色": Theme(
+        name="暗色", qss=DARK_QSS, preview_css=DARK_PREVIEW_CSS,
+        engine_theme="default",
+    ),
+    "LaTeX 亮色": Theme(
+        name="LaTeX 亮色", qss=LIGHT_QSS, preview_css=LIGHT_PREVIEW_CSS,
+        engine_theme="latex",
+    ),
+    "LaTeX 暗色": Theme(
+        name="LaTeX 暗色", qss=DARK_QSS, preview_css=DARK_PREVIEW_CSS,
+        engine_theme="latex",
+    ),
 }
 
 DEFAULT_THEME = "亮色"

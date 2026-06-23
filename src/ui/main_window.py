@@ -320,6 +320,14 @@ class MainWindow(QMainWindow):
 
         self._current_theme = theme_name
         QApplication.instance().setStyleSheet(theme.qss)
+        self._engine.theme = theme.engine_theme
+
+        # 同步行号区域颜色
+        if "暗色" in theme_name:
+            self._editor.set_line_number_colors("#1e1e1e", "#777")
+        else:
+            self._editor.set_line_number_colors("#f0f0f0", "#999")
+
         self._update_preview()
 
         # 菜单中标记当前主题（切换后取消前一个的勾选）
