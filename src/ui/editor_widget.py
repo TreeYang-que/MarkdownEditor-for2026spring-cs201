@@ -1,8 +1,12 @@
 """
 Markdown 源码编辑器 —— 带行号的 QPlainTextEdit 子类。
+支持拖放/粘贴图片和文件，自动插入 Markdown 引用链接。
 """
 
-from PyQt6.QtCore import Qt, pyqtSignal, QRect, QSize
+from pathlib import Path
+from urllib.parse import urlparse, unquote
+
+from PyQt6.QtCore import Qt, pyqtSignal, QRect, QSize, QUrl
 from PyQt6.QtGui import QColor, QFont, QFontDatabase, QFontInfo, QPainter, QTextCursor, QTextFormat
 from PyQt6.QtWidgets import QPlainTextEdit, QTextEdit, QWidget
 
@@ -48,8 +52,20 @@ class EditorWidget(QPlainTextEdit):
 
     TAB_SPACES = 4
 
+    # 图片文件扩展名
+    IMAGE_EXTENSIONS = {
+        ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg",
+        ".bmp", ".ico", ".tiff", ".tif", ".apng", ".avif",
+    }
+
     def __init__(self, parent=None):
         super().__init__(parent)
+
+        # 当前 Markdown 文件所在目录（用于计算相对路径）
+        self._base_dir: str | None = None
+
+        # 接受拖放
+        self.setAcceptDrops(True)
 
         # 字体设置 —— 跨平台 fallback
         editor_font = _find_available_font(
@@ -70,6 +86,14 @@ class EditorWidget(QPlainTextEdit):
         self.updateRequest.connect(self._update_line_number_area)
 
         self._update_line_number_area_width(0)
+
+    # ── 基础目录（用于相对路径计算） ────────────────────
+
+    def set_base_dir(self, path: str | None) -> None:
+        """设置当前 Markdown 文件所在目录。
+        拖放/粘贴文件时，若文件在该目录下则使用相对路径。
+        """
+        self._base_dir = path
 
     # ── 行号区域 ──────────────────────────────────────
 
@@ -163,6 +187,85 @@ class EditorWidget(QPlainTextEdit):
             end += self.TAB_SPACES
             if not cursor.movePosition(QTextCursor.MoveOperation.Down):
                 break
+
+    # ── 文件/图片拖放与粘贴 ──────────────────────────────
+
+    @staticmethod
+    def _is_image_path(filepath: str) -> bool:
+        """判断文件路径是否为图片。"""
+        return Path(filepath).suffix.lower() in EditorWidget.IMAGE_EXTENSIONS
+
+    def _resolve_path(self, filepath: str) -> str:
+        """将绝对路径解析为 Markdown 可用的路径。
+        若文件在当前文档目录下则使用相对路径，否则使用绝对路径。
+        统一使用正斜杠。
+        """
+        resolved = str(Path(filepath).resolve())
+
+        if self._base_dir:
+            base = str(Path(self._base_dir).resolve())
+            try:
+                relative = str(Path(resolved).relative_to(base))
+                # 统一正斜杠
+                return relative.replace("\\", "/")
+            except ValueError:
+                pass
+
+        return resolved.replace("\\", "/")
+
+    def _insert_file_links(self, paths: list[str]) -> None:
+        """在光标位置逐行插入文件的 Markdown 引用链接。"""
+        cursor = self.textCursor()
+        lines: list[str] = []
+        for filepath in paths:
+            filename = Path(filepath).name
+            link_path = self._resolve_path(filepath)
+            if self._is_image_path(filepath):
+                lines.append(f"![{filename}]({link_path})")
+            else:
+                lines.append(f"[{filename}]({link_path})")
+
+        text = ("\n".join(lines) + "\n") if len(lines) > 1 else lines[0]
+        cursor.insertText(text)
+        self.setTextCursor(cursor)
+        self.setFocus()
+
+    # ── 拖放事件 ─────────────────────────────────────────
+
+    def dragEnterEvent(self, event) -> None:
+        """接受包含文件 URL 的拖放。"""
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
+
+    def dropEvent(self, event) -> None:
+        """处理文件拖放 —— 插入 Markdown 引用链接。"""
+        urls = event.mimeData().urls()
+        if urls:
+            local_paths: list[str] = []
+            for url in urls:
+                if url.isLocalFile():
+                    local_paths.append(url.toLocalFile())
+            if local_paths:
+                self._insert_file_links(local_paths)
+                return
+        super().dropEvent(event)
+
+    # ── 粘贴事件 ─────────────────────────────────────────
+
+    def insertFromMimeData(self, source) -> None:
+        """粘贴时优先处理文件 URL，否则交给默认文本粘贴。"""
+        if source.hasUrls():
+            local_paths: list[str] = []
+            for url in source.urls():
+                if url.isLocalFile():
+                    local_paths.append(url.toLocalFile())
+            # 同时有文本和文件时，只处理文件（图片或文件在剪贴板中常有双重表示）
+            if local_paths:
+                self._insert_file_links(local_paths)
+                return
+        super().insertFromMimeData(source)
 
 
 class _LineNumberArea(QWidget):

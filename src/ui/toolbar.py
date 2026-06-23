@@ -15,9 +15,9 @@ class MarkdownToolbar(QToolBar):
     # ── 按钮定义 ──────────────────────────────────────
 
     BUTTONS: list[dict] = [
-        {"text": "粗体", "before": "**", "after": "**", "tip": "粗体 (Ctrl+B)"},
-        {"text": "斜体", "before": "*",  "after": "*",  "tip": "斜体 (Ctrl+I)"},
-        {"text": "删除线", "before": "~~", "after": "~~", "tip": "删除线"},
+        {"text": "粗体", "before": "**", "after": "**", "tip": "粗体 (Ctrl+B)", "shortcut": "Ctrl+B"},
+        {"text": "斜体", "before": "*",  "after": "*",  "tip": "斜体 (Ctrl+I)", "shortcut": "Ctrl+I"},
+        {"text": "删除线", "before": "~~", "after": "~~", "tip": "删除线 (Ctrl+Shift+S)", "shortcut": "Ctrl+Shift+S"},
         None,  # 分隔线
         {"text": "H1", "before": "# ",       "after": "",   "tip": "一级标题"},
         {"text": "H2", "before": "## ",      "after": "",   "tip": "二级标题"},
@@ -27,10 +27,10 @@ class MarkdownToolbar(QToolBar):
         {"text": "编号", "before": "1. ",     "after": "",   "tip": "有序列表"},
         {"text": "任务", "before": "- [ ] ",  "after": "",   "tip": "任务列表"},
         None,
-        {"text": "链接", "before": "[",       "after": "](url)",   "tip": "插入链接"},
+        {"text": "链接", "before": "[",       "after": "](url)",   "tip": "插入链接 (Ctrl+K)", "shortcut": "Ctrl+K"},
         {"text": "图片", "before": "![alt](", "after": ")",        "tip": "插入图片"},
-        {"text": "代码", "before": "`",       "after": "`",        "tip": "行内代码"},
-        {"text": "代码块", "before": "\n```\n", "after": "\n```\n", "tip": "代码块"},
+        {"text": "代码", "before": "`",       "after": "`",        "tip": "行内代码 (Ctrl+`)", "shortcut": "Ctrl+`"},
+        {"text": "代码块", "before": "\n```\n", "after": "\n```\n", "tip": "代码块 (Ctrl+Shift+C)", "shortcut": "Ctrl+Shift+C"},
         None,
         {"text": "引用", "before": "> ",      "after": "",   "tip": "引用"},
         {"text": "分隔线", "before": "\n---\n", "after": "",  "tip": "水平分隔线"},
