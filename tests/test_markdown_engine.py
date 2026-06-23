@@ -94,6 +94,30 @@ class TestMarkdownEngine:
         assert "<p>Hello</p>" in full
         assert "</html>" in full
 
+    # ── 主题渲染 ────────────────────────────────────
+
+    def test_latex_theme_preview(self):
+        """LaTeX 主题预览模式：CSS 变量已解析为确定值。"""
+        self.engine.theme = "latex"
+        full = self.engine.wrap_html("<p>test</p>", preview_mode=True)
+        assert "Latin Modern Roman" in full
+        assert "1.618em" in full
+        assert "var(--base-font-size)" not in full  # 变量已解析
+
+    def test_latex_theme_export(self):
+        """LaTeX 主题导出模式：保留 CSS 变量供浏览器使用。"""
+        self.engine.theme = "latex"
+        full = self.engine.wrap_html("<p>test</p>", preview_mode=False)
+        assert "Latin Modern Roman" in full
+        assert "var(--base-font-size)" in full  # 变量保留
+
+    def test_default_theme(self):
+        """默认主题不应包含 LaTeX 字体。"""
+        self.engine.theme = "default"
+        full = self.engine.wrap_html("<p>test</p>", preview_mode=True)
+        assert "Latin Modern" not in full
+        assert "Microsoft YaHei" in full
+
     # ── LaTeX 数学公式 ──────────────────────────────
 
     def test_inline_math(self):
@@ -116,14 +140,16 @@ class TestMarkdownEngine:
         assert "mathjax" in full.lower()
 
     def test_wrap_html_preview_mode_has_math_css(self):
-        """预览模式应包含公式高亮 CSS。"""
+        """预览模式应包含公式高亮 CSS（紫色背景标记）。"""
+        self.engine.theme = "default"
         full = self.engine.wrap_html("<p>test</p>", preview_mode=True)
-        assert "arithmatex" in full
+        assert "#f3e8ff" in full  # 紫色公式背景
 
     def test_wrap_html_export_mode_no_math_css(self):
-        """导出模式不应包含公式高亮 CSS。"""
+        """导出模式不应包含预览专用的紫色公式高亮 CSS。"""
+        self.engine.theme = "default"
         full = self.engine.wrap_html("<p>test</p>", preview_mode=False)
-        assert "arithmatex" not in full
+        assert "#f3e8ff" not in full  # 紫色公式背景不应出现
 
 
 def run_tests():

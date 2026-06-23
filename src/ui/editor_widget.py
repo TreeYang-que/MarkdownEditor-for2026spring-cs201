@@ -80,6 +80,8 @@ class EditorWidget(QPlainTextEdit):
 
         # 行号区域
         self._line_number_area = _LineNumberArea(self)
+        self._line_number_bg: str = "#f0f0f0"
+        self._line_number_fg: str = "#999"
 
         # 信号连接
         self.blockCountChanged.connect(self._update_line_number_area_width)
@@ -94,6 +96,12 @@ class EditorWidget(QPlainTextEdit):
         拖放/粘贴文件时，若文件在该目录下则使用相对路径。
         """
         self._base_dir = path
+
+    def set_line_number_colors(self, bg: str, fg: str) -> None:
+        """设置行号区域的背景色和文字颜色。"""
+        self._line_number_bg = bg
+        self._line_number_fg = fg
+        self._line_number_area.update()
 
     # ── 行号区域 ──────────────────────────────────────
 
@@ -133,7 +141,7 @@ class EditorWidget(QPlainTextEdit):
     def line_number_area_paint_event(self, event) -> None:
         """绘制行号。"""
         painter = QPainter(self._line_number_area)
-        painter.fillRect(event.rect(), QColor("#f0f0f0"))
+        painter.fillRect(event.rect(), QColor(self._line_number_bg))
 
         block = self.firstVisibleBlock()
         block_number = block.blockNumber()
@@ -147,7 +155,7 @@ class EditorWidget(QPlainTextEdit):
         while block.isValid() and top <= event.rect().bottom():
             if block.isVisible() and bottom >= event.rect().top():
                 number = str(block_number + 1)
-                painter.setPen(QColor("#999"))
+                painter.setPen(QColor(self._line_number_fg))
                 painter.drawText(
                     0, top,
                     self._line_number_area.width() - 6,
