@@ -3,8 +3,44 @@ Markdown 源码编辑器 —— 带行号的 QPlainTextEdit 子类。
 """
 
 from PyQt6.QtCore import Qt, pyqtSignal, QRect, QSize
-from PyQt6.QtGui import QColor, QFont, QPainter, QTextCursor, QTextFormat
+from PyQt6.QtGui import QColor, QFont, QFontDatabase, QFontInfo, QPainter, QTextCursor, QTextFormat
 from PyQt6.QtWidgets import QPlainTextEdit, QTextEdit, QWidget
+
+# 跨平台等宽字体优先级列表
+_FALLBACK_FONTS = [
+    "Cascadia Code",       # Windows 现代编程字体
+    "JetBrains Mono",      # 跨平台编程字体
+    "Fira Code",           # 开源编程字体
+    "Consolas",            # Windows 经典
+    "Courier New",         # Windows 备用
+    "DejaVu Sans Mono",    # Linux
+    "Menlo",               # macOS
+    "Monaco",              # macOS 经典
+    "monospace",           # 系统最终兜底
+]
+
+
+def _find_available_font(preferred: str, fallbacks: list[str], fixed_pitch: bool = True) -> str:
+    """在系统已安装字体中查找第一个可用的。
+
+    Args:
+        preferred: 首选字体名称。
+        fallbacks: 备选字体列表。
+        fixed_pitch: 是否要求等宽。
+
+    Returns:
+        第一个找到的可用字体名称。
+    """
+    candidates = [preferred] + [f for f in fallbacks if f != preferred]
+    for name in candidates:
+        font = QFont(name)
+        info = QFontInfo(font)
+        # 检查字体是否真实可用（Qt 会做字体替换，比较解析后的名称）
+        if info.family().lower() == name.lower():
+            if not fixed_pitch or info.fixedPitch():
+                return name
+    # 最终兜底
+    return "monospace" if fixed_pitch else font.defaultFamily()
 
 
 class EditorWidget(QPlainTextEdit):
@@ -15,8 +51,11 @@ class EditorWidget(QPlainTextEdit):
     def __init__(self, parent=None):
         super().__init__(parent)
 
-        # 字体设置
-        font = QFont("Consolas", 13)
+        # 字体设置 —— 跨平台 fallback
+        editor_font = _find_available_font(
+            "Cascadia Code", _FALLBACK_FONTS, fixed_pitch=True
+        )
+        font = QFont(editor_font, 13)
         font.setStyleHint(QFont.StyleHint.Monospace)
         self.setFont(font)
         self.setTabStopDistance(

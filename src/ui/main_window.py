@@ -322,12 +322,11 @@ class MainWindow(QMainWindow):
         QApplication.instance().setStyleSheet(theme.qss)
         self._update_preview()
 
-        # 菜单中标记当前主题
+        # 菜单中标记当前主题（切换后取消前一个的勾选）
         view_menu = self.menuBar().actions()[2]  # 视图菜单
         for action in view_menu.menu().actions():
-            if theme_name in action.text():
-                action.setCheckable(True)
-                action.setChecked(True)
+            action.setCheckable(True)
+            action.setChecked(theme_name in action.text())
 
         self._update_status(f"主题: {theme_name}")
 

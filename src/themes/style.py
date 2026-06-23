@@ -26,11 +26,18 @@ QMenuBar {
     border-bottom: 1px solid #e0e0e0;
     padding: 2px;
     font-size: 13px;
+    color: #333;
+}
+
+QMenuBar::item {
+    color: #333;
+    padding: 4px 8px;
 }
 
 QMenuBar::item:selected {
     background-color: #e8f0fe;
     border-radius: 4px;
+    color: #1a1a1a;
 }
 
 QMenu {
@@ -38,11 +45,13 @@ QMenu {
     border: 1px solid #d0d0d0;
     border-radius: 6px;
     padding: 4px;
+    color: #333;
 }
 
 QMenu::item {
     padding: 6px 28px 6px 12px;
     border-radius: 4px;
+    color: #333;
 }
 
 QMenu::item:selected {
@@ -99,8 +108,9 @@ QSplitter::handle:hover {
 
 QPlainTextEdit {
     background-color: #ffffff;
+    color: #222;
     border: none;
-    font-family: "Consolas", "Courier New", monospace;
+    font-family: "Cascadia Code", "Consolas", "Courier New", monospace;
     font-size: 14px;
     padding: 8px;
     selection-background-color: #b3d4ff;
@@ -108,6 +118,7 @@ QPlainTextEdit {
 
 QTextBrowser {
     background-color: #ffffff;
+    color: #333;
     border: none;
     font-size: 15px;
 }
@@ -169,6 +180,11 @@ QMenuBar {
     padding: 2px;
     font-size: 13px;
     color: #ccc;
+}
+
+QMenuBar::item {
+    color: #ccc;
+    padding: 4px 8px;
 }
 
 QMenuBar::item:selected {
@@ -243,11 +259,11 @@ QSplitter::handle:hover {
 
 QPlainTextEdit {
     background-color: #1e1e1e;
+    color: #d4d4d4;
     border: none;
-    font-family: "Consolas", "Courier New", monospace;
+    font-family: "Cascadia Code", "Consolas", "Courier New", monospace;
     font-size: 14px;
     padding: 8px;
-    color: #d4d4d4;
     selection-background-color: #264f78;
 }
 

@@ -79,7 +79,7 @@ class MarkdownEngine:
 {code_css}
 
 body {{
-    font-family: "Microsoft YaHei", "PingFang SC", -apple-system, sans-serif;
+    font-family: "Microsoft YaHei", "PingFang SC", "Noto Sans SC", -apple-system, sans-serif;
     font-size: 15px;
     line-height: 1.8;
     color: #333;
@@ -112,7 +112,7 @@ code {{
     background: #f4f4f4;
     padding: 2px 6px;
     border-radius: 3px;
-    font-family: "Consolas", "Courier New", monospace;
+    font-family: "Cascadia Code", "Consolas", "Courier New", "DejaVu Sans Mono", monospace;
     font-size: 0.9em;
     color: #c7254e;
 }}
