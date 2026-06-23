@@ -3,15 +3,22 @@
 """
 
 import logging
-import os
-import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from threading import Thread
-from urllib.parse import urlparse
 from urllib.request import urlretrieve
 
 logger = logging.getLogger(__name__)
+
+
+# ═══════════════════════════════════════════════════════════════
+#  COS 字体存储
+# ═══════════════════════════════════════════════════════════════
+
+# 腾讯云 COS 字体直链基地址（所有字体文件存放于此）
+FONT_BASE_URL = (
+    "https://picture-for-public-1379103641.cos.ap-beijing.myqcloud.com/fonts"
+)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -25,9 +32,13 @@ class FontEntry:
     family_name: str                            # 字体族名（系统注册名 / CSS font-family）
     css_fallback: str                           # CSS font-family 字符串（含回退）
     category: str                               # "serif" / "sans-serif" / "mono"
-    download_url: str                           # zip 包下载地址
-    files: list[str] = field(default_factory=list)  # zip 中需要提取的字体文件名
+    files: list[str] = field(default_factory=list)  # COS 上的字体文件名
     description: str = ""                       # 中文描述
+
+    @property
+    def download_urls(self) -> list[str]:
+        """返回每个字体文件的完整 COS 下载地址。"""
+        return [f"{FONT_BASE_URL}/{f}" for f in self.files]
 
 
 RECOMMENDED_FONTS: dict[str, FontEntry] = {
@@ -37,10 +48,6 @@ RECOMMENDED_FONTS: dict[str, FontEntry] = {
         css_fallback='"Source Han Serif SC", "Noto Serif CJK SC", '
                      '"华文宋体", "宋体-简", "SimSun", serif',
         category="serif",
-        download_url=(
-            "https://github.com/adobe-fonts/source-han-serif/releases/"
-            "download/2.003R/14_SourceHanSerifCN.zip"
-        ),
         files=[
             "SourceHanSerifCN-Regular.otf",
             "SourceHanSerifCN-Bold.otf",
@@ -53,10 +60,6 @@ RECOMMENDED_FONTS: dict[str, FontEntry] = {
         css_fallback='"Source Han Sans SC", "Noto Sans CJK SC", '
                      '"微软雅黑", "PingFang SC", sans-serif',
         category="sans-serif",
-        download_url=(
-            "https://github.com/adobe-fonts/source-han-sans/releases/"
-            "download/2.004R/09_SourceHanSansSC.zip"
-        ),
         files=[
             "SourceHanSansSC-Regular.otf",
             "SourceHanSansSC-Bold.otf",
@@ -69,10 +72,6 @@ RECOMMENDED_FONTS: dict[str, FontEntry] = {
         css_fallback='"LXGW WenKai", "霞鹜文楷", '
                      '"楷体", "华文楷体", "KaiTi", cursive',
         category="serif",
-        download_url=(
-            "https://github.com/lxgw/LxgwWenKai/releases/"
-            "download/v1.330/LXGWWenKai-Regular.ttf"
-        ),
         files=["LXGWWenKai-Regular.ttf"],
         description="霞鹜文楷 — 开源楷体风格，字形优美，适合正文和引用",
     ),
@@ -82,13 +81,21 @@ RECOMMENDED_FONTS: dict[str, FontEntry] = {
         css_fallback='"LXGW WenKai Mono", "霞鹜文楷等宽", '
                      '"Consolas", "Courier New", monospace',
         category="mono",
-        download_url=(
-            "https://github.com/lxgw/LxgwWenKai/releases/"
-            "download/v1.330/LXGWWenKaiMono-Regular.ttf"
-        ),
         files=["LXGWWenKaiMono-Regular.ttf"],
         description="霞鹜文楷等宽 — 代码友好的楷体等宽字体",
     ),
+}
+
+# 字体文件大小（字节），用于下载进度计算。None 表示首次运行时自动探测。
+# pylint: disable=line-too-long
+FONT_FILE_SIZES: dict[str, int]
+FONT_FILE_SIZES = {
+    "SourceHanSerifCN-Regular.otf": 11_626_108,
+    "SourceHanSerifCN-Bold.otf": 13_731_606,
+    "SourceHanSansSC-Regular.otf": 13_433_469,
+    "SourceHanSansSC-Bold.otf": 14_739_026,
+    "LXGWWenKai-Regular.ttf": 13_233_580,
+    "LXGWWenKaiMono-Regular.ttf": 12_516_388,
 }
 
 
@@ -96,36 +103,53 @@ RECOMMENDED_FONTS: dict[str, FontEntry] = {
 #  下载辅助函数
 # ═══════════════════════════════════════════════════════════════
 
-def _dl_zip(entry, dest: Path, on_progress, on_error, key: str) -> None:
-    """下载 zip 并解压提取指定文件。"""
-    zip_path = dest / f"{key}.zip"
-    try:
-        def _progress(count, block_size, total):
-            if total > 0 and on_progress:
-                on_progress(min(int(count * block_size / total * 100), 100))
+def _dl_single(url: str, dest_path: Path, on_progress: callable) -> None:
+    """从 COS 下载单个字体文件（带重试）。"""
+    import time
 
-        urlretrieve(entry.download_url, str(zip_path), _progress)
-        with zipfile.ZipFile(zip_path, "r") as zf:
-            for name in entry.files:
-                zf.extract(name, str(dest))
-    finally:
+    max_retries = 3
+    for attempt in range(max_retries):
         try:
-            zip_path.unlink(missing_ok=True)
-        except OSError:
-            pass
+            urlretrieve(url, str(dest_path), on_progress)
+            return  # 成功
+        except Exception:
+            if attempt == max_retries - 1:
+                raise
+            time.sleep(1 * (2 ** attempt))  # 1s → 2s → 4s
 
 
-def _dl_single(entry, dest: Path, on_progress, on_error, key: str) -> None:
-    """下载单个 .ttf/.otf 文件直接保存。"""
-    # entry.files 中的第一个文件名作为保存名
-    filename = entry.files[0] if entry.files else Path(entry.download_url).name
-    dest_path = dest / filename
+def _download_font_files(
+    entry, dest: Path, on_progress: callable, on_error: callable, key: str
+) -> None:
+    """从 COS 逐文件下载字体（不再使用 zip 包）。"""
+    files = entry.files
+    for idx, filename in enumerate(files):
+        url = f"{FONT_BASE_URL}/{filename}"
+        dest_path = dest / filename
 
-    def _progress(count, block_size, total):
-        if total > 0 and on_progress:
-            on_progress(min(int(count * block_size / total * 100), 100))
+        if dest_path.exists():
+            # 文件已存在，跳过下载
+            file_progress = FONT_FILE_SIZES.get(filename)
+            if file_progress and on_progress:
+                on_progress(min(int((idx + 1) / len(files) * 100), 100))
+            continue
 
-    urlretrieve(entry.download_url, str(dest_path), _progress)
+        # 单个文件下载进度回调（含文件索引，计算总体进度）
+        def _file_progress(count, block_size, total, _idx=idx, _n=len(files)):
+            if on_progress:
+                total_sz = FONT_FILE_SIZES.get(filename)
+                if total_sz and total_sz > 0:
+                    pct = min(int((_idx * total_sz + count * block_size) /
+                                   (_n * total_sz / len(files) * 2) * 100), 99)
+                else:
+                    if total > 0:
+                        pct = min(int((_idx * 100 + count * block_size / total * 100) / _n), 99)
+                on_progress(pct)
+
+        _dl_single(url, dest_path, _file_progress)
+
+    if on_progress:
+        on_progress(100)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -229,15 +253,11 @@ class FontManager:
                 on_error(key, f"未知字体: {key}")
             return
 
-        is_zip = entry.download_url.lower().endswith(".zip")
-
         def _run() -> None:
             try:
-                if is_zip:
-                    _dl_zip(entry, self._fonts_dir, on_progress, on_error, key)
-                else:
-                    _dl_single(entry, self._fonts_dir, on_progress, on_error, key)
-
+                _download_font_files(
+                    entry, self._fonts_dir, on_progress, on_error, key
+                )
                 if on_done:
                     on_done(key)
             except Exception as e:
