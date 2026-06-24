@@ -151,13 +151,20 @@ MarkdownEditor/
 
 ## 许可证
 
-本项目采用 [MIT License](LICENSE)。
+本项目采用 [GNU General Public License v3](LICENSE)。
 
 ```
-MIT License
+GNU General Public License v3
 
-Copyright (c) 2026 TreeYang-que
+Copyright (C) 2026 TreeYang-que
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
 ```
+
+由于本项目依赖 PyQt6（GPL v3），受 GPL 传染性条款约束，项目整体必须以 GPL 兼容协议发布。
 
 本项目使用的第三方组件遵循其各自的许可证：
 - **PyQt6** — GPL v3 / Commercial
