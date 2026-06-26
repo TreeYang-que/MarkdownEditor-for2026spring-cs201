@@ -166,8 +166,6 @@ the Free Software Foundation, either version 3 of the License, or
 (at your option) any later version.
 ```
 
-由于本项目依赖 PyQt6（GPL v3），受 GPL 传染性条款约束，项目整体必须以 GPL 兼容协议发布。
-
 本项目使用的第三方组件遵循其各自的许可证：
 - **PyQt6** — GPL v3 / Commercial
 - **Python-Markdown** — BSD License
