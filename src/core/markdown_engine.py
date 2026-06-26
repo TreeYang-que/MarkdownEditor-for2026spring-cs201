@@ -376,6 +376,9 @@ class MarkdownEngine:
         self._code_css: str = ""
         self._theme: str = "default"
         self._setup()
+        # 增量转换缓存：{块文本 → 转换后的 HTML 片段}，不含锚点标签
+        self._convert_cache: dict[str, str] = {}
+        self._cache_max = 800  # 上限，超出清半
 
     # ── 属性 ──────────────────────────────────────────
 
@@ -522,8 +525,20 @@ class MarkdownEngine:
                 f'<a id="md-b-{block["index"]}"'
                 f' name="md-b-{block["index"]}">​</a>'
             )
-            # 独立转换此块
-            html_parts.append(self.convert(block['text']))
+            # 增量转换：相同块文本命中缓存则跳过 convert 调用
+            block_text = block['text']
+            cached = self._convert_cache.get(block_text)
+            if cached is not None:
+                html_parts.append(cached)
+            else:
+                converted = self.convert(block_text)
+                html_parts.append(converted)
+                self._convert_cache[block_text] = converted
+                # 超出上限清半，避免内存无限增长
+                if len(self._convert_cache) > self._cache_max:
+                    mid = self._cache_max // 2
+                    for key in list(self._convert_cache.keys())[:mid]:
+                        del self._convert_cache[key]
 
             # 建立此块覆盖的所有行 → 块索引映射
             for line in range(block['start_line'], block['end_line'] + 1):
