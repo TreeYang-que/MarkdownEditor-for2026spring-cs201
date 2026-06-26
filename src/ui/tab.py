@@ -95,6 +95,19 @@ class Tab(QWidget):
             self._pending_reverse = None
             self._forward_driven = False
 
+    def refresh_sync(self) -> None:
+        """外部调用：用当前编辑区可见首行 + 最新锚点映射，立即重算预览位置。
+
+        用于窗口 resize 后锚点坐标已更新的场景——不做节流，直接完成同步。
+        """
+        if not self._sync_scrolling or not self._line_to_block:
+            return
+        editor_sb = self._editor.verticalScrollBar()
+        preview_sb = self._preview.verticalScrollBar()
+        self._pending_forward = (editor_sb.value(), editor_sb, preview_sb)
+        self._do_forward_sync()
+        self._pending_forward = None
+
     def set_line_block_map(self, mapping: dict[int, int]) -> None:
         """由 MainWindow 在预览更新后调用，存储行→块映射表。
 
@@ -189,7 +202,10 @@ class Tab(QWidget):
             if next_y is not None:
                 block_height = max(next_y - anchor_y, 1)
             else:
-                block_height = max(preview_sb.maximum() - anchor_y, 1)
+                # scrollbar.maximum() = document_height - viewport_height，
+                # 必须加上 pageStep() 才等于真正的文档底部坐标。
+                doc_bottom = preview_sb.maximum() + preview_sb.pageStep()
+                block_height = max(doc_bottom - anchor_y, 1)
 
             target_y = int(anchor_y + inner_ratio * block_height)
         else:
@@ -244,7 +260,7 @@ class Tab(QWidget):
             anchor_y = self._anchor_y_lookup.get(target_block, 0)
             next_y = self._block_next_anchor_y.get(target_block)
             if next_y is None:
-                next_y = preview_sb.maximum()
+                next_y = preview_sb.maximum() + preview_sb.pageStep()
 
             start_line = self._block_to_first_line.get(target_block, 0)
             end_line = self._block_to_last_line.get(target_block, start_line)

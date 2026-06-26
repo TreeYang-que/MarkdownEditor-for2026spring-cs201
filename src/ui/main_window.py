@@ -116,6 +116,11 @@ class MainWindow(QMainWindow):
         # 转换请求计数器（用于丢弃过期结果）
         self._preview_request_id: int = 0
 
+        # 预览区 resize 后锚点重建防抖定时器（200ms）
+        self._resize_anchor_timer = QTimer(self)
+        self._resize_anchor_timer.setSingleShot(True)
+        self._resize_anchor_timer.timeout.connect(self._on_resize_rebuild_anchor)
+
         # ── 自动保存定时器（60 秒间隔） ────────────────
         self._autosave_timer = QTimer(self)
         self._autosave_timer.setInterval(60_000)
@@ -306,6 +311,7 @@ class MainWindow(QMainWindow):
         tab.text_changed.connect(self._on_text_changed)
         tab.markdown_file_dropped.connect(self._on_drop_markdown_file)
         tab.editor.cursorPositionChanged.connect(self._on_cursor_changed)
+        tab.preview.resized.connect(self._on_preview_resized)
 
     # ═══════════════════════════════════════════════════════
     #  格式化快捷键
@@ -692,28 +698,106 @@ class MainWindow(QMainWindow):
             tab.preview.show_preview(html)
             preview_sb = tab.preview.verticalScrollBar()
             preview_sb.setValue(int(cursor_ratio * preview_sb.maximum()))
+            _need_anchor_scan = True
+        elif self._sync_scrolling_enabled and line_to_block is not None:
+            # 同步滚动模式：离屏 QTextDocument 预计算锚点 → 一次性渲染。
+            # setHtml 后锚点已就绪，refresh_sync 直接精确跳转，无中间态闪烁。
+            self._render_with_offscreen_anchors(tab, html)
+            _need_anchor_scan = False
         else:
             tab.preview.show_preview(html)
+            _need_anchor_scan = True
 
         # 恢复同步滚动状态
         tab.set_sync_scrolling(self._sync_scrolling_enabled)
 
-        # 构建预览→编辑反向锚点映射
-        # 使用 50ms 延迟确保 QTextDocument 异步布局完成；
-        # 若首次扫描未找到锚点，100ms 后重试一次。
-        QTimer.singleShot(50, lambda: self._build_anchor_map(tab))
-        QTimer.singleShot(150, lambda: self._retry_anchor_map(tab))
+        # 非离屏预计算路径：异步重建锚点作为补充
+        if _need_anchor_scan:
+            QTimer.singleShot(50, lambda: self._build_anchor_map(tab))
+            QTimer.singleShot(150, lambda: self._retry_anchor_map(tab))
+
+    # ═══════════════════════════════════════════════════════
+    #  离屏锚点预计算（同步滚动用）
+    # ═══════════════════════════════════════════════════════
+
+    def _render_with_offscreen_anchors(self, tab: Tab, html: str) -> None:
+        """用离屏 QTextDocument 预计算锚点，再一次性渲染到真实预览区。
+
+        setHtml 之前锚点坐标已就绪，渲染后直接 refresh_sync 精确跳转，
+        中间不会出现"回退到顶部"或"跳到近似位置"的视觉闪烁。
+        """
+        positions = self._scan_anchors_offscreen(html, tab)
+        tab.preview.setHtml(html)
+        if positions:
+            tab.set_anchor_map(positions)
+            tab.refresh_sync()
+        else:
+            # 离屏扫描异常，退化为比例近似定位
+            editor = tab.editor
+            first_visible = editor.firstVisibleBlock()
+            if first_visible.isValid():
+                ratio = first_visible.blockNumber() / max(editor.blockCount(), 1)
+                sb = tab.preview.verticalScrollBar()
+                sb.setValue(int(ratio * sb.maximum()))
+
+    @staticmethod
+    def _scan_anchors_offscreen(html: str, tab: Tab) -> list[tuple[int, int]]:
+        """在离屏 QTextDocument 中渲染 HTML 并扫描所有 md-b-N 锚点坐标。
+
+        离屏文档与真实预览区的字体、宽度一致，布局结果可互换使用。
+        """
+        from PyQt6.QtGui import QTextDocument
+        from PyQt6.QtCore import QSizeF
+
+        temp = QTextDocument()
+        temp.setDefaultFont(tab.preview.document().defaultFont())
+        temp.setTextWidth(tab.preview.viewport().width() or 600)
+        temp.setHtml(html)
+        # 设置极大页面高度强制完成全部布局计算
+        temp.setPageSize(QSizeF(temp.idealWidth(), 1_000_000))
+
+        layout = temp.documentLayout()
+        found: dict[int, int] = {}
+        block = temp.begin()
+        while block.isValid():
+            it = block.begin()
+            while not it.atEnd():
+                fragment = it.fragment()
+                if fragment.isValid():
+                    fmt = fragment.charFormat()
+                    if fmt.isAnchor():
+                        for name in fmt.anchorNames():
+                            if name.startswith("md-b-"):
+                                try:
+                                    idx = int(name.split("-")[-1])
+                                    if idx not in found:
+                                        rect = layout.blockBoundingRect(block)
+                                        found[idx] = int(rect.top())
+                                except ValueError:
+                                    pass
+                it += 1
+            block = block.next()
+
+        result = [(y, idx) for idx, y in found.items()]
+        result.sort(key=lambda p: p[0])
+        return result
+
+    # ═══════════════════════════════════════════════════════
+    #  锚点异步重建（非同步滚动模式的后备）
+    # ═══════════════════════════════════════════════════════
 
     def _build_anchor_map(self, tab: Tab) -> None:
         """扫描预览区 QTextDocument，建立预览 Y → 块索引的反向映射。
 
         必须在 setHtml() 之后调用，且需等待 QTextDocument 异步布局完成。
+        锚点就绪后立即正向同步，消除 setHtml 导致的"回退抖动"。
         """
         if tab is None or tab is not self._active_tab:
             return
         positions = tab.preview.build_anchor_map()
         if positions:
             tab.set_anchor_map(positions)
+            tab.refresh_sync()
 
     def _retry_anchor_map(self, tab: Tab) -> None:
         """锚点映射重试：若 _anchor_y_lookup 仍为空则再次尝试扫描。"""
@@ -724,6 +808,36 @@ class MainWindow(QMainWindow):
         positions = tab.preview.build_anchor_map()
         if positions:
             tab.set_anchor_map(positions)
+            tab.refresh_sync()
+
+    def _on_preview_resized(self) -> None:
+        """预览区 resize → 防抖后重建锚点映射。"""
+        self._resize_anchor_timer.start(50)
+
+    def _on_resize_rebuild_anchor(self) -> None:
+        """resize 防抖到期 → 重建当前标签页锚点映射并刷新预览。"""
+        tab = self._active_tab
+        if tab is None or tab.preview.document().isEmpty():
+            return
+
+        def _rebuild(t: Tab) -> None:
+            """50ms 后扫描锚点，成功则紧接着正向同步预览。"""
+            positions = t.preview.build_anchor_map()
+            if positions:
+                t.set_anchor_map(positions)
+                t.refresh_sync()  # 用新锚点重算预览位置
+
+        def _retry(t: Tab) -> None:
+            """150ms 重试：若首次未扫描到锚点则再试一次。"""
+            if t._anchor_y_lookup:
+                return
+            positions = t.preview.build_anchor_map()
+            if positions:
+                t.set_anchor_map(positions)
+                t.refresh_sync()
+
+        QTimer.singleShot(50, lambda: _rebuild(tab))
+        QTimer.singleShot(150, lambda: _retry(tab))
 
     # ═══════════════════════════════════════════════════════
     #  格式化工具

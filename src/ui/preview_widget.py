@@ -2,12 +2,14 @@
 Markdown 预览面板 —— 使用 QTextBrowser 实时渲染 HTML。
 """
 
-from PyQt6.QtCore import QUrl, Qt
+from PyQt6.QtCore import QUrl, Qt, pyqtSignal
 from PyQt6.QtWidgets import QTextBrowser
 
 
 class PreviewWidget(QTextBrowser):
     """HTML 实时预览面板。"""
+
+    resized = pyqtSignal()  # 窗口/分栏大小变化 → 重建锚点映射
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -15,6 +17,11 @@ class PreviewWidget(QTextBrowser):
         self.setReadOnly(True)
         # 默认显示提示文字
         self.setPlaceholderText("预览区域 — 在左侧输入 Markdown 即可实时预览")
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        if not self.document().isEmpty():
+            self.resized.emit()
 
     def show_preview(self, html: str) -> None:
         """显示渲染后的 HTML，保持原来的滚动位置。
