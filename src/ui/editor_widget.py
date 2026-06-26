@@ -77,7 +77,7 @@ class EditorWidget(QPlainTextEdit):
         editor_font = _find_available_font(
             "Cascadia Code", _FALLBACK_FONTS, fixed_pitch=True
         )
-        font = QFont(editor_font, 14)
+        font = QFont(editor_font, 18)
         font.setStyleHint(QFont.StyleHint.Monospace)
         self.setFont(font)
         self.setTabStopDistance(
@@ -188,7 +188,9 @@ class EditorWidget(QPlainTextEdit):
         """绘制行号。"""
         painter = QPainter(self._line_number_area)
         painter.fillRect(event.rect(), QColor(self._line_number_bg))
-        painter.setFont(self.font())  # 行号字体与编辑器一致，避免主题切换时字体差异
+        line_num_font = QFont(self.font())
+        line_num_font.setPixelSize(15)
+        painter.setFont(line_num_font)
 
         block = self.firstVisibleBlock()
         block_number = block.blockNumber()
