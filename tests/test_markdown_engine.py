@@ -151,6 +151,101 @@ class TestMarkdownEngine:
         full = self.engine.wrap_html("<p>test</p>", preview_mode=False)
         assert "#f3e8ff" not in full  # 紫色公式背景不应出现
 
+    # ── 逻辑块切分 ──────────────────────────────────
+
+    def test_split_blocks_simple(self):
+        """简单文本应正确切分为逻辑块。"""
+        text = "第一段\n\n第二段"
+        blocks = self.engine._split_blocks(text)
+        assert len(blocks) == 2
+        assert blocks[0]['text'] == "第一段"
+        assert blocks[0]['start_line'] == 0
+        assert blocks[0]['end_line'] == 0
+        assert blocks[0]['index'] == 0
+        assert blocks[1]['text'] == "第二段"
+        assert blocks[1]['start_line'] == 2
+        assert blocks[1]['end_line'] == 2
+        assert blocks[1]['index'] == 1
+
+    def test_split_blocks_fenced_code(self):
+        """围栏代码块不应被内部空行切割。"""
+        text = "开头\n\n```python\n\nprint('hello')\n\n```\n\n结尾"
+        blocks = self.engine._split_blocks(text)
+        assert len(blocks) == 3  # 开头、代码块、结尾
+        assert blocks[0]['text'] == "开头"
+        assert blocks[1]['text'] == "```python\n\nprint('hello')\n\n```"
+        assert blocks[2]['text'] == "结尾"
+
+    def test_split_blocks_empty_text(self):
+        """空文本应返回空列表。"""
+        blocks = self.engine._split_blocks("")
+        assert blocks == []
+
+    def test_split_blocks_only_blanks(self):
+        """纯空白行文本应返回空列表。"""
+        blocks = self.engine._split_blocks("\n\n\n")
+        assert blocks == []
+
+    def test_split_blocks_heading(self):
+        """标题应作为独立块。"""
+        text = "# 标题\n\n正文内容"
+        blocks = self.engine._split_blocks(text)
+        assert len(blocks) == 2
+        assert blocks[0]['text'] == "# 标题"
+        assert blocks[1]['text'] == "正文内容"
+
+    # ── 锚点注入 ────────────────────────────────────
+
+    def test_convert_with_anchors_basic(self):
+        """基本文本应注入锚点标签。"""
+        text = "# 标题\n\n正文"
+        body, line_to_block = self.engine.convert_with_anchors(text)
+        assert '<a id="md-b-0"' in body
+        assert '<a id="md-b-1"' in body
+        assert '<h1' in body
+        assert '正文</p>' in body
+        # 验证行→块映射
+        assert line_to_block[0] == 0  # "# 标题" 在第 0 行
+        assert line_to_block[2] == 1  # "正文" 在第 2 行
+
+    def test_convert_with_anchors_fenced_code(self):
+        """围栏代码块内空行不应切割块。"""
+        text = "开头\n\n```\nline1\n\nline2\n```\n\n结尾"
+        body, line_to_block = self.engine.convert_with_anchors(text)
+        # 应产生 3 个锚点（开头、代码块、结尾）
+        assert '<a id="md-b-0"' in body
+        assert '<a id="md-b-1"' in body
+        assert '<a id="md-b-2"' in body
+        # 验证代码块内部行归属于同一块
+        assert line_to_block[2] == 1  # "开头"在块0，"```" 在块1
+        assert line_to_block[4] == 1  # 代码块内空行也归属块1
+        assert line_to_block[5] == 1  # "line2" 也在块1
+
+    def test_convert_with_anchors_empty_line_mapping(self):
+        """空行应映射到最近的上一非空块。"""
+        text = "# 标题\n\n\n正文"
+        body, line_to_block = self.engine.convert_with_anchors(text)
+        # 第 1 行是空行，应归属到块 0（标题）
+        assert line_to_block[1] == 0
+        # 第 3 行是 "正文"，应归属到块 1
+        assert line_to_block[3] == 1
+
+    def test_convert_with_anchors_empty_text(self):
+        """空文本应返回空映射。"""
+        body, line_to_block = self.engine.convert_with_anchors("")
+        assert body == ""
+        assert line_to_block == {}
+
+    def test_convert_with_anchors_wrapped_html(self):
+        """锚点注入后的 body 应可正常被 wrap_html 包装。"""
+        text = "# 标题\n\n正文段落"
+        body, _ = self.engine.convert_with_anchors(text)
+        full = self.engine.wrap_html(body, preview_mode=True)
+        assert '<!DOCTYPE html>' in full
+        assert '<a id="md-b-0"' in full
+        assert '<h1' in full
+        assert '</html>' in full
+
 
 def run_tests():
     """简单的测试运行器（不依赖 pytest）。"""

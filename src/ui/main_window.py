@@ -32,7 +32,7 @@ class _PreviewWorker(QObject):
     """后台线程：执行 Markdown → HTML 转换，释放主线程 UI。"""
 
     _do_convert = pyqtSignal(str, int, str, bool)  # text, request_id, font_css, dark_mode
-    finished = pyqtSignal(str, int)
+    finished = pyqtSignal(str, int, object)  # (html, request_id, line_to_block)
 
     def __init__(self, engine: MarkdownEngine):
         super().__init__()
@@ -42,16 +42,16 @@ class _PreviewWorker(QObject):
     def _on_convert(self, text: str, request_id: int, font_css: str,
                     dark_mode: bool) -> None:
         if not text.strip():
-            self.finished.emit("", request_id)
+            self.finished.emit("", request_id, None)
             return
         try:
-            body = self._engine.convert(text)
+            body, line_to_block = self._engine.convert_with_anchors(text)
             html = self._engine.wrap_html(body, preview_mode=True,
                                           font_face_css=font_css,
                                           dark_mode=dark_mode)
-            self.finished.emit(html, request_id)
+            self.finished.emit(html, request_id, line_to_block)
         except Exception:
-            self.finished.emit("", request_id)
+            self.finished.emit("", request_id, None)
 
     def request(self, text: str, request_id: int, font_css: str = "",
                 dark_mode: bool = False) -> None:
@@ -651,6 +651,7 @@ class MainWindow(QMainWindow):
             return
         text = tab.editor_text
         if not text.strip():
+            tab.set_line_block_map({})  # 清空映射表
             tab.preview.show_placeholder()
             return
 
@@ -659,7 +660,8 @@ class MainWindow(QMainWindow):
         self._preview_worker.request(text, self._preview_request_id, font_css,
                                       dark_mode=self._dark_mode)
 
-    def _on_preview_ready(self, html: str, request_id: int) -> None:
+    def _on_preview_ready(self, html: str, request_id: int,
+                          line_to_block: dict | None = None) -> None:
         """后台转换完成，回主线程更新预览（丢弃过期结果）。
 
         刷新 HTML 期间临时关闭该标签页的同步滚动，
@@ -672,6 +674,10 @@ class MainWindow(QMainWindow):
             return
 
         tab = self._active_tab
+
+        # 存储行→块映射表（同步滚动时使用锚点精确定位）
+        if line_to_block is not None:
+            tab.set_line_block_map(line_to_block)
 
         # 临时禁止同步滚动，防止 setHtml 触发的 scrollbar 事件干扰编辑区
         tab.set_sync_scrolling(False)
@@ -691,6 +697,33 @@ class MainWindow(QMainWindow):
 
         # 恢复同步滚动状态
         tab.set_sync_scrolling(self._sync_scrolling_enabled)
+
+        # 构建预览→编辑反向锚点映射
+        # 使用 50ms 延迟确保 QTextDocument 异步布局完成；
+        # 若首次扫描未找到锚点，100ms 后重试一次。
+        QTimer.singleShot(50, lambda: self._build_anchor_map(tab))
+        QTimer.singleShot(150, lambda: self._retry_anchor_map(tab))
+
+    def _build_anchor_map(self, tab: Tab) -> None:
+        """扫描预览区 QTextDocument，建立预览 Y → 块索引的反向映射。
+
+        必须在 setHtml() 之后调用，且需等待 QTextDocument 异步布局完成。
+        """
+        if tab is None or tab is not self._active_tab:
+            return
+        positions = tab.preview.build_anchor_map()
+        if positions:
+            tab.set_anchor_map(positions)
+
+    def _retry_anchor_map(self, tab: Tab) -> None:
+        """锚点映射重试：若 _anchor_y_lookup 仍为空则再次尝试扫描。"""
+        if tab is None or tab is not self._active_tab:
+            return
+        if tab._anchor_y_lookup:
+            return  # 已就绪，无需重试
+        positions = tab.preview.build_anchor_map()
+        if positions:
+            tab.set_anchor_map(positions)
 
     # ═══════════════════════════════════════════════════════
     #  格式化工具

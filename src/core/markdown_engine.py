@@ -439,6 +439,109 @@ class MarkdownEngine:
         self._md.reset()
         return self._md.convert(markdown_text)
 
+    # ── 逻辑块切分与锚点注入 ──────────────────────────
+
+    def _split_blocks(self, text: str) -> list[dict]:
+        """将 Markdown 源码按逻辑块切分，感知围栏代码块边界。
+
+        切分规则：
+        - 围栏代码块（``` 或 ~~~）视为不可分割的独立块
+        - 其余内容以空行为分隔，连续非空行组成一个逻辑块
+
+        Returns:
+            [{start_line, end_line, index, text}, ...]
+        """
+        lines = text.split('\n')
+        blocks: list[dict] = []
+        i = 0
+        block_idx = 0
+
+        while i < len(lines):
+            start = i
+            line = lines[i]
+
+            # 跳过空行（分隔符）
+            if not line.strip():
+                i += 1
+                continue
+
+            # 围栏代码块 —— 找到配对的闭合围栏
+            if line.startswith('```') or line.startswith('~~~'):
+                fence = line[:3]
+                i += 1
+                while i < len(lines) and not lines[i].startswith(fence):
+                    i += 1
+                if i < len(lines):
+                    i += 1  # 闭合围栏行
+                blocks.append({
+                    'start_line': start,
+                    'end_line': i - 1,
+                    'index': block_idx,
+                    'text': '\n'.join(lines[start:i]),
+                })
+                block_idx += 1
+                continue
+
+            # 普通块 —— 收集连续非空行
+            while i < len(lines) and lines[i].strip():
+                i += 1
+
+            blocks.append({
+                'start_line': start,
+                'end_line': i - 1,
+                'index': block_idx,
+                'text': '\n'.join(lines[start:i]),
+            })
+            block_idx += 1
+
+        return blocks
+
+    def convert_with_anchors(self, text: str) -> tuple[str, dict[int, int]]:
+        """按逻辑块切分并逐块转换，在每个块的 HTML 前注入命名的锚点标签。
+
+        编辑区通过行号查找所属块的 index，预览区通过 scrollToAnchor
+        跳转到对应 <a name="md-b-N"> 实现精确同步。
+
+        Returns:
+            (html_body_with_anchors, line_to_block_map)
+            - html_body_with_anchors: 注入锚点的 HTML body
+            - line_to_block_map: 编辑器行号 → 块索引 的映射表
+        """
+        blocks = self._split_blocks(text)
+        if not blocks:
+            return "", {}
+
+        html_parts: list[str] = []
+        line_to_block: dict[int, int] = {}
+
+        for block in blocks:
+            # 在每个逻辑块 HTML 前插入命名锚点。
+            # ⚠️ 必须包含零宽空格字符（​），否则 QTextDocument 不为此
+            # <a> 元素创建文本片段，导致 build_anchor_map() 扫描不到锚点。
+            html_parts.append(
+                f'<a id="md-b-{block["index"]}"'
+                f' name="md-b-{block["index"]}">​</a>'
+            )
+            # 独立转换此块
+            html_parts.append(self.convert(block['text']))
+
+            # 建立此块覆盖的所有行 → 块索引映射
+            for line in range(block['start_line'], block['end_line'] + 1):
+                line_to_block[line] = block['index']
+
+        # 补齐空行：空行归属到最近的上一非空块
+        all_lines = text.split('\n')
+        for line_num in range(len(all_lines)):
+            if line_num not in line_to_block:
+                for prev in range(line_num - 1, -1, -1):
+                    if prev in line_to_block:
+                        line_to_block[line_num] = line_to_block[prev]
+                        break
+                else:
+                    line_to_block[line_num] = 0
+
+        return '\n'.join(html_parts), line_to_block
+
     def wrap_html(
         self,
         html_body: str,
